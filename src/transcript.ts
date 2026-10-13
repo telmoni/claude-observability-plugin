@@ -8,7 +8,8 @@
  * id, model, stop reason and token counts; of a tool call its id and name, and
  * of the Skill tool the skill's name alone; of a tool's result whether it was
  * an error. A prompt's text is looked at only to tell an interruption from a
- * prompt, and nothing of it is kept.
+ * prompt, and nothing of it is kept: each line is cut down to those as it is
+ * parsed, before it is held.
  */
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
@@ -62,6 +63,15 @@ export interface Line {
  */
 export const MAX_READ = 16 * 1024 * 1024;
 
+/** How much of a window is held as bytes at once, the rest read as it is parsed. */
+const CHUNK = 1024 * 1024;
+
+/** The marker an interrupted turn's last line opens with. */
+const INTERRUPTED = '[Request interrupted';
+
+/** Claude Code's own name for an error's kind, such as `rate_limit`. */
+const ERROR_KIND = /^[a-z][a-z_]{0,63}$/;
+
 /** The whole lines read, and whether the file holds more past them. */
 export interface Window {
   lines: Line[];
@@ -76,50 +86,176 @@ export function readLines(path: string, offset: number): Line[] {
 }
 
 /**
- * The whole lines from `offset` on, at most `max` bytes of them. A last line
- * with no newline yet is still being written and is left for the next read;
- * a line that is not JSON is passed over.
+ * The whole lines from `offset` on, at most `max` bytes of them, each cut
+ * down to what the plugin reads. A last line with no newline yet is still
+ * being written and is left for the next read; a line that is not JSON is
+ * passed over.
  */
 export function readWindow(path: string, offset: number, max = MAX_READ): Window {
   const size = statSync(path).size;
   if (offset >= size) return { lines: [], more: false };
-  const length = Math.min(size - offset, max);
-  const buffer = Buffer.alloc(length);
+  const limit = Math.min(size, offset + max);
+  const lines: Line[] = [];
+  // Where the line being read began; still `offset` if none ended.
+  let begun = offset;
   const fd = openSync(path, 'r');
   try {
-    let read = 0;
-    while (read < length) {
-      const n = readSync(fd, buffer, read, length - read, offset + read);
+    const chunk = Buffer.alloc(Math.min(CHUNK, limit - offset));
+    let pending: Buffer[] = [];
+    for (let at = offset; at < limit; ) {
+      const n = readSync(fd, chunk, 0, Math.min(chunk.length, limit - at), at);
       if (n === 0) break;
-      read += n;
+      const read = chunk.subarray(0, n);
+      let from = 0;
+      for (let newline = read.indexOf(0x0a); newline !== -1; newline = read.indexOf(0x0a, from)) {
+        const tail = read.subarray(from, newline);
+        const bytes = pending.length === 0 ? tail : Buffer.concat([...pending, tail]);
+        pending = [];
+        begun = at + newline + 1;
+        from = newline + 1;
+        const entry = parsed(bytes);
+        if (entry !== undefined) lines.push({ entry, end: begun });
+      }
+      // Copied: the chunk is read into again.
+      if (from < n) pending.push(Buffer.from(read.subarray(from)));
+      at += n;
     }
   } finally {
     closeSync(fd);
   }
-  const lines: Line[] = [];
-  let start = 0;
-  for (;;) {
-    const newline = buffer.indexOf(0x0a, start);
-    if (newline === -1) break;
-    const text = buffer.subarray(start, newline).toString('utf8').trim();
-    start = newline + 1;
-    if (text === '') continue;
-    try {
-      const entry = JSON.parse(text) as unknown;
-      if (entry !== null && typeof entry === 'object' && !Array.isArray(entry)) {
-        lines.push({ entry: entry as Entry, end: offset + start });
-      }
-    } catch {
-      // A line torn by a crash, or not Claude Code's: nothing in it is read.
-    }
-  }
-  const more = offset + length < size;
-  if (start === 0 && more) {
+  const more = limit < size;
+  if (begun === offset && more) {
     // One line longer than a window — a pasted image, say — is passed over
     // as an unreadable one is, rather than read for ever.
-    return { lines, more, skipTo: endOfLine(path, offset + length, size, max) };
+    return { lines, more, skipTo: endOfLine(path, limit, size, max) };
   }
   return { lines, more };
+}
+
+function parsed(bytes: Buffer): Entry | undefined {
+  const text = bytes.toString('utf8').trim();
+  if (text === '') return undefined;
+  try {
+    const value = JSON.parse(text) as unknown;
+    return isObject(value) ? slim(value) : undefined;
+  } catch {
+    // A line torn by a crash, or not Claude Code's: nothing in it is read.
+    return undefined;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Of an entry, what the plugin reads and nothing else: a prompt, a reply, a
+ * thought, a tool's input or output, a path, are gone before the entry is
+ * held, so a turn hundreds of megabytes long is held in a few, and nothing
+ * said in a session is in memory longer than it takes to parse its line.
+ */
+function slim(raw: Record<string, unknown>): Entry {
+  const entry: Entry = {};
+  if (typeof raw['type'] === 'string') entry.type = raw['type'];
+  if (typeof raw['uuid'] === 'string') entry.uuid = raw['uuid'];
+  if (typeof raw['timestamp'] === 'string') entry.timestamp = raw['timestamp'];
+  if (raw['isMeta'] === true) entry.isMeta = true;
+  if (raw['isCompactSummary'] === true) entry.isCompactSummary = true;
+  if (raw['isSidechain'] === true) entry.isSidechain = true;
+  if (raw['isApiErrorMessage'] === true) entry.isApiErrorMessage = true;
+  if (typeof raw['error'] === 'string' && ERROR_KIND.test(raw['error'])) entry.error = raw['error'];
+  if (raw['turnPosition'] !== undefined && raw['turnPosition'] !== null) entry.turnPosition = true;
+  const message = raw['message'];
+  if (!isObject(message)) return entry;
+  const kept: NonNullable<Entry['message']> = {};
+  if (typeof message['id'] === 'string') kept.id = message['id'];
+  if (typeof message['model'] === 'string') kept.model = message['model'];
+  const reason = message['stop_reason'];
+  if (typeof reason === 'string' || reason === null) kept.stop_reason = reason;
+  const usage = message['usage'];
+  if (isObject(usage)) {
+    const counts: Usage = {};
+    for (const key of ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'] as const) {
+      const count = usage[key];
+      if (typeof count === 'number') counts[key] = count;
+    }
+    kept.usage = counts;
+  }
+  const content = message['content'];
+  if (typeof content === 'string') kept.content = kindOfText(content);
+  else if (Array.isArray(content)) kept.content = content.filter(isObject).map(slimBlock);
+  entry.message = kept;
+  return entry;
+}
+
+function slimBlock(raw: Record<string, unknown>): Block {
+  const block: Block = {};
+  if (typeof raw['type'] === 'string') block.type = raw['type'];
+  if (typeof raw['id'] === 'string') block.id = raw['id'];
+  if (typeof raw['name'] === 'string') block.name = raw['name'];
+  if (typeof raw['tool_use_id'] === 'string') block.tool_use_id = raw['tool_use_id'];
+  if (raw['is_error'] === true) block.is_error = true;
+  if (block.type === 'text' && typeof raw['text'] === 'string') block.text = kindOfText(raw['text']);
+  // Of a tool's input, the one thing read: the name of the skill the Skill tool ran.
+  const input = raw['input'];
+  if (block.type === 'tool_use' && block.name === 'Skill' && isObject(input) && typeof input['skill'] === 'string') {
+    block.input = { skill: input['skill'] };
+  }
+  return block;
+}
+
+/**
+ * A text's kind in place of the text: an interruption's marker, a line
+ * Claude Code wraps in a tag of its own, something a person wrote, or nothing.
+ */
+function kindOfText(text: string): string {
+  const lead = text.trimStart();
+  if (lead.startsWith(INTERRUPTED)) return INTERRUPTED;
+  if (lead.startsWith('<')) return '<';
+  return lead === '' ? '' : '…';
+}
+
+/** How far back from a place the line ending there is looked for. */
+const MARK_MOST = 1024 * 1024;
+
+/** An id, or a kind, as Claude Code spells them: nothing else is kept of a line. */
+const PLAIN = /^[\w-]{1,64}$/;
+
+/**
+ * What the line ending at `end` is known by — its id, its kind where it has
+ * none, or only that a line ends there where it cannot be read back — and
+ * undefined where no line ends there. The state keeps it beside the place it
+ * saves, so a transcript rewritten under that place is known for one.
+ */
+export function markOf(path: string, end: number): string | undefined {
+  if (end <= 0) return undefined;
+  const fd = openSync(path, 'r');
+  try {
+    let span = Math.min(end, 64 * 1024);
+    for (;;) {
+      const buffer = Buffer.alloc(span);
+      if (readSync(fd, buffer, 0, span, end - span) < span || buffer[span - 1] !== 0x0a) return undefined;
+      const newline = span > 1 ? buffer.lastIndexOf(0x0a, span - 2) : -1;
+      if (newline !== -1 || span === end) return markOfLine(buffer.subarray(newline + 1, span - 1));
+      if (span >= MARK_MOST) return '';
+      span = Math.min(end, MARK_MOST);
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function markOfLine(bytes: Buffer): string {
+  try {
+    const value = JSON.parse(bytes.toString('utf8')) as unknown;
+    if (isObject(value)) {
+      if (typeof value['uuid'] === 'string' && PLAIN.test(value['uuid'])) return value['uuid'];
+      if (typeof value['type'] === 'string' && PLAIN.test(value['type'])) return `kind:${value['type']}`;
+    }
+  } catch {
+    // Not Claude Code's: known only as a line.
+  }
+  return '';
 }
 
 /** Where the line running on at `from` ends, past its newline; the file's end if it has none yet. */
@@ -161,7 +297,7 @@ export function isToolResult(entry: Entry): boolean {
 }
 
 export function isInterruption(entry: Entry): boolean {
-  return entry.type === 'user' && leadingText(entry).startsWith('[Request interrupted');
+  return entry.type === 'user' && leadingText(entry).startsWith(INTERRUPTED);
 }
 
 /**
@@ -213,12 +349,15 @@ export function isMarked(lines: readonly Line[]): boolean {
   return lines.some(({ entry }) => entry.type === 'user' && entry.turnPosition !== undefined);
 }
 
-/** A model's reply that ends a turn rather than asking for a tool. */
+/**
+ * A model's reply that ends a turn rather than asking for a tool, or pausing
+ * for one the API runs itself (`pause_turn`), after which the turn goes on.
+ */
 export function endsTurn(entry: Entry): boolean {
   if (entry.type !== 'assistant') return false;
   if (entry.isApiErrorMessage) return true;
   const reason = entry.message?.stop_reason;
-  return typeof reason === 'string' && reason !== 'tool_use';
+  return typeof reason === 'string' && reason !== 'tool_use' && reason !== 'pause_turn';
 }
 
 /**
