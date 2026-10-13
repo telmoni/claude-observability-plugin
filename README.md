@@ -15,13 +15,15 @@ The marketplace is added sparse, so only its manifest is fetched; the plugin its
 
 ## Configure
 
-Make a project API key holding the **ingest** scope on your project's API keys page, then:
+Make a project API key holding the **ingest** scope on your project's API keys page, then, in a Claude Code session, run:
 
-```sh
-claude plugin configure telmoni-observability@telmoni-plugins
+```text
+/plugin configure telmoni-observability@telmoni-plugins
 ```
 
-Claude Code keeps the key with its own credentials: in the Keychain on macOS, and in its credentials file elsewhere. The endpoint defaults to `https://api.telmoni.com`; a self-hosted Telmoni gives its own machine host. `TELMONI_API_KEY` and `TELMONI_ENDPOINT` in the environment serve when the plugin's own settings are unset.
+and paste the key where it asks: the field is masked. From your shell, `claude plugin configure telmoni-observability@telmoni-plugins --values-stdin` takes the values as JSON on its input instead (`{"TELMONI_API_KEY": "telmoni_…"}`); without `--values-stdin` it only lists them.
+
+Claude Code keeps the key with its own credentials: in the Keychain on macOS, and in its credentials file elsewhere. Left blank, the endpoint is `https://api.telmoni.com`; a self-hosted Telmoni gives its own machine host. `TELMONI_API_KEY` and `TELMONI_ENDPOINT` in the environment serve when the plugin's own settings are unset.
 
 Start a new session: plugins load as a session starts.
 
@@ -34,7 +36,7 @@ Each turn — from your prompt to Claude's last reply, or to your interruption �
 - each subagent, a step named by its kind (`subagent Explore`) holding its own model and tool calls;
 - the skills the turn ran, by name, as the tag `skills`.
 
-A turn is sent once it has ended. If Telmoni cannot be reached, the next turn's hook sends it, and a turn sent twice is stored once.
+A turn is sent once it has ended — one that started a subagent in the background, once that subagent has finished too, so its step holds all of the subagent's work. If Telmoni cannot be reached, the next turn's hook sends it, and a turn sent again is the same bytes, which Telmoni stores once.
 
 ## When something is wrong
 
