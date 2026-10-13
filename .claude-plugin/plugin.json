@@ -22,8 +22,7 @@
     "TELMONI_ENDPOINT": {
       "type": "string",
       "title": "Telmoni endpoint",
-      "description": "Where ingest is served: https://api.telmoni.com, or your own deployment's machine host",
-      "default": "https://api.telmoni.com"
+      "description": "Where ingest is served: leave it blank for https://api.telmoni.com, or give your own deployment's machine host"
     }
   }
 }
