@@ -34,10 +34,17 @@ export interface Received {
   body: string;
 }
 
-/** Ingest as the SDK meets it: an OTLP/JSON lane that keeps what it is sent, or answers `status`. */
+/**
+ * Ingest as the SDK meets it: an OTLP/JSON lane that keeps what it is sent,
+ * answers `status`, or takes it in part, naming what it refused in `partial`.
+ * A body it took is stored once, as ingest's claim on a body stores a copy
+ * sent again.
+ */
 export class FakeIngest {
   readonly received: Received[] = [];
+  readonly stored = new Set<string>();
   status = 200;
+  partial: string | undefined;
   #server: Server | undefined;
 
   async start(): Promise<string> {
@@ -45,10 +52,14 @@ export class FakeIngest {
       const chunks: Buffer[] = [];
       request.on('data', (chunk: Buffer) => chunks.push(chunk));
       request.on('end', () => {
-        this.received.push({ url: request.url ?? '', headers: request.headers, body: Buffer.concat(chunks).toString('utf8') });
+        const body = Buffer.concat(chunks).toString('utf8');
+        this.received.push({ url: request.url ?? '', headers: request.headers, body });
         if (this.status === 200) {
+          this.stored.add(body);
+          const partialSuccess =
+            this.partial === undefined ? null : { rejectedSpans: 1, errorMessage: this.partial };
           response.writeHead(200, { 'Content-Type': 'application/json', 'Telmoni-Content-Mode': 'off' });
-          response.end(JSON.stringify({ partialSuccess: null }));
+          response.end(JSON.stringify({ partialSuccess }));
         } else {
           response.writeHead(this.status, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ code: 7, message: '/errors/authz/forbidden: this API key does not hold the ingest scope' }));

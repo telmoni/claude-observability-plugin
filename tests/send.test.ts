@@ -72,6 +72,59 @@ describe('a sender', () => {
     }
     expect(logged).toHaveLength(1);
     expect(logged[0]).toMatch(/^not sent: .*403/);
+    expect(logged[0]).not.toContain('telmoni_test');
+    expect(logged[0]).not.toContain(endpoint);
+  });
+
+  it('counts a turn the platform took in part as taken, naming what it refused, since sent again it is refused again', async () => {
+    ingest.partial = 'span 0f0f0f0f0f0f0f0f refused: name over its cap';
+    const sender = new Sender({ endpoint, apiKey: 'telmoni_test' }, (line) => void logged.push(line));
+    try {
+      expect(await sender.send(turn('3d6f8a1c-5b2e-4f7a-9c0d-8e1f2a3b4c5d'))).toBe(true);
+    } finally {
+      await sender.close();
+    }
+    expect(ingest.received).toHaveLength(1);
+    expect(logged).toEqual(['taken in part: telmoni: the server refused a span: name over its cap']);
+  });
+
+  it('sends a turn of more spans than the SDK queues by default, whole', async () => {
+    const record = turn('3d6f8a1c-5b2e-4f7a-9c0d-8e1f2a3b4c5d');
+    const tools = Array.from({ length: 2_500 }, (_, index) => ({
+      type: 'tool_call' as const,
+      name: 'Read',
+      start: at(4) + index,
+      end: at(4) + index + 1,
+    }));
+    const sender = new Sender({ endpoint, apiKey: 'telmoni_test' }, (line) => void logged.push(line));
+    try {
+      expect(await sender.send({ ...record, end: at(9) + 3_000, inside: [...record.inside!, ...tools] })).toBe(true);
+    } finally {
+      await sender.close();
+    }
+    expect(logged).toEqual([]);
+    expect(ingest.spans()).toHaveLength(2 + 2 + 2_500);
+  });
+
+  it('sends a turn again once Telmoni is back, the same bytes, stored once', async () => {
+    ingest.status = 503;
+    const quick = { sleep: () => Promise.resolve() };
+    const down = new Sender({ endpoint, apiKey: 'telmoni_test' }, (line) => void logged.push(line), quick);
+    try {
+      expect(await down.send(turn('3d6f8a1c-5b2e-4f7a-9c0d-8e1f2a3b4c5d'))).toBe(false);
+    } finally {
+      await down.close();
+    }
+    expect(logged).toEqual([expect.stringMatching(/^not sent: .*503/)]);
+    ingest.status = 200;
+    const back = new Sender({ endpoint, apiKey: 'telmoni_test' }, (line) => void logged.push(line), quick);
+    try {
+      expect(await back.send(turn('3d6f8a1c-5b2e-4f7a-9c0d-8e1f2a3b4c5d'))).toBe(true);
+    } finally {
+      await back.close();
+    }
+    expect(new Set(ingest.received.map((request) => request.body)).size).toBe(1);
+    expect(ingest.stored.size).toBe(1);
   });
 
   it('passes over a turn the SDK refuses, rather than hold the session up on it', async () => {
