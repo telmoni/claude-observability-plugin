@@ -10,17 +10,21 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import type { RunRecord } from 'telmoni';
 
-import { type Context, type Subagent, recordOf } from './record.js';
+import { type Context, type Subagent, recordOf, subagentsIn } from './record.js';
 import type { Destination } from './send.js';
 import type { Settings } from './settings.js';
 import { type SessionState, readState, withLock, writeState } from './state.js';
 import {
+  type Entry,
   type Line,
+  MAX_READ,
   type Segment,
+  endsTurn,
   hasEnded,
   hasWork,
+  isInterruption,
   isMarked,
-  readLines,
+  markOf,
   readWindow,
   segments,
 } from './transcript.js';
@@ -52,11 +56,23 @@ const LOCK_WAIT_MS = 60_000;
 /** Claude Code may write a turn's last lines after its `Stop` hook starts. */
 const LATE_LINES_MS = 2_000;
 
+/**
+ * The most windows a turn longer than one is read in: past that, 256 MiB of
+ * the transcript, it goes in parts, each a run.
+ */
+const MOST_WINDOWS = 16;
+
 /** The runs remembered as sent: more than any session holds turns. */
 const SENT_KEPT = 5_000;
 
 /** A subagent's kind names a step: a plain name, or none. */
 const AGENT_TYPE = /^[\w.:-]{1,64}$/;
+
+/**
+ * How long a subagent's transcript may go unwritten while it holds the turn
+ * that started it: one tool of its own may run that long.
+ */
+const SUBAGENT_IDLE_MS = 30 * 60_000;
 
 /**
  * The subagents' transcripts beside the session's, found by the tool call
@@ -92,17 +108,44 @@ export function subagentsOf(transcriptPath: string): (toolUseId: string) => Suba
     if (found === undefined) return undefined;
     let subagent = read.get(found.path);
     if (subagent === undefined) {
-      let entries: Subagent['entries'] = [];
+      let entries: Entry[] = [];
+      let touched = 0;
       try {
-        entries = readLines(found.path, 0).map((line) => line.entry);
+        touched = statSync(found.path).mtimeMs;
+        entries = readWindow(found.path, 0, MAX_READ * MOST_WINDOWS).lines.map((line) => line.entry);
       } catch {
         // Removed since: the step stands without its calls.
       }
-      subagent = { type: found.type, entries };
+      subagent = { type: found.type, ...firstRun(entries), touched };
       read.set(found.path, subagent);
     }
     return subagent;
   };
+}
+
+/**
+ * A subagent's work up to the end of its first run, and whether it has
+ * ended: a subagent resumed in a later turn writes on in the same transcript.
+ */
+function firstRun(entries: Entry[]): { entries: Entry[]; ended: boolean } {
+  for (const [index, entry] of entries.entries()) {
+    if (!endsTurn(entry) && !isInterruption(entry)) continue;
+    // The reply's lines after the first that carries its stop reason are still the reply.
+    let end = index + 1;
+    const id = entry.message?.id;
+    while (id !== undefined && entries[end]?.type === 'assistant' && entries[end]?.message?.id === id) end++;
+    return { entries: entries.slice(0, end), ended: true };
+  }
+  return { entries, ended: false };
+}
+
+/**
+ * Whether a subagent the segment started is still at work: in the
+ * background, it writes on after the turn that started it has ended. One
+ * that has written nothing for `SUBAGENT_IDLE_MS` is taken to have stopped.
+ */
+function waitsOnSubagent(segment: Segment, context: Context): boolean {
+  return subagentsIn(segment, context).some((subagent) => !subagent.ended && Date.now() - subagent.touched < SUBAGENT_IDLE_MS);
 }
 
 /**
@@ -133,16 +176,46 @@ function timesOf(segment: Segment): number[] {
   });
 }
 
-/** The transcript from where the session's state left it; from the top again if the file has shrunk below that. */
+/**
+ * Whether the transcript is still the one the saved place is a place in:
+ * no smaller, and the line before the place the one that was there.
+ */
+function stillAt(path: string, state: SessionState): boolean {
+  if (state.offset === 0) return true;
+  if (statSync(path).size < state.offset) return false;
+  const mark = markOf(path, state.offset);
+  return state.mark === undefined ? mark !== undefined : mark === state.mark;
+}
+
+/**
+ * The transcript from where the session's state left it, or from the top
+ * where the file has shrunk or been rewritten under that place. A turn
+ * longer than the window is read whole, the window doubled until it holds
+ * the next turn's opening, up to `MOST_WINDOWS` windows.
+ */
 function readFrom(
   path: string,
   state: SessionState,
-  max: number | undefined,
+  max = MAX_READ,
 ): { offset: number; lines: Line[]; more: boolean; skipTo?: number } {
-  const offset = statSync(path).size < state.offset ? 0 : state.offset;
-  const window = readWindow(path, offset, max);
-  const read = { offset, lines: once(window.lines), more: window.more };
+  const offset = stillAt(path, state) ? state.offset : 0;
+  let window = readWindow(path, offset, max);
+  let lines = once(window.lines);
+  const alone = (): boolean => segments(lines, state.marked === true || isMarked(lines)).length === 1;
+  for (let span = max; window.more && span < max * MOST_WINDOWS && alone(); ) {
+    span = Math.min(span * 2, max * MOST_WINDOWS);
+    window = readWindow(path, offset, span);
+    lines = once(window.lines);
+  }
+  const read = { offset, lines, more: window.more };
   return window.skipTo === undefined ? read : { ...read, skipTo: window.skipTo };
+}
+
+/** A place to save: where to read on from, and what the line before it is known by. */
+function placeAt(path: string, state: SessionState, offset: number): SessionState {
+  const { mark: _, ...rest } = state;
+  const mark = markOf(path, offset);
+  return mark === undefined ? { ...rest, offset } : { ...rest, offset, mark };
 }
 
 export async function sync(input: HookInput, settings: Settings, deps: Deps): Promise<void> {
@@ -156,78 +229,97 @@ export async function sync(input: HookInput, settings: Settings, deps: Deps): Pr
     return;
   }
   const locked = await withLock(settings.dir, input.sessionId, LOCK_WAIT_MS, async () => {
-    const state = readState(settings.dir, input.sessionId);
-    let read = readFrom(input.transcriptPath, state, deps.windowBytes);
-    if (read.lines.length === 0) {
-      if (read.skipTo !== undefined) writeState(settings.dir, input.sessionId, { ...state, offset: read.skipTo });
-      return;
-    }
-    let marked = state.marked === true || isMarked(read.lines);
-    let all = segments(read.lines, marked);
-    const stopping = input.event === 'Stop' || input.event === 'StopFailure';
-    if (stopping && !read.more && !hasEnded(all.at(-1)!)) {
-      await sleep(deps.lateLinesMs ?? LATE_LINES_MS);
-      read = readFrom(input.transcriptPath, state, deps.windowBytes);
-      marked = marked || isMarked(read.lines);
-      all = segments(read.lines, marked);
-    }
-    const { offset, more } = read;
-    // Where the file runs on past the window, the window's last segment may
-    // be cut midway, and waits for the next hook — unless it is all the
-    // window holds, a turn longer than a window, sent a window at a time.
-    // Otherwise the last segment is the turn still going, unless the turn
-    // just stopped or the session is over; the ones before it have each been
-    // followed by another turn's opening.
-    const ending = input.event === 'SessionEnd' && !more;
-    const last = (segment: Segment): boolean =>
-      more ? all.length === 1 : ending || (stopping && hasEnded(segment));
-    const closed = all.filter((segment, index) => index < all.length - 1 || last(segment));
-    const sent = new Set(state.sent ?? []);
-    let through = state.through;
-    const save = (end: number): void => {
-      const next: SessionState = { ...state, offset: end };
-      if (marked) next.marked = true;
-      if (sent.size > 0) next.sent = [...sent].slice(-SENT_KEPT);
-      if (through !== undefined) next.through = through;
-      writeState(settings.dir, input.sessionId, next);
-    };
-    if (closed.length === 0) {
-      if (offset !== state.offset || (marked && !state.marked)) save(offset);
-      return;
-    }
-    const context: Context = {
-      sessionId: input.sessionId,
-      provider: settings.provider,
-      subagent: subagentsOf(input.transcriptPath),
-      sessionEnded: false,
-    };
-    const sender = deps.sender({ endpoint: settings.endpoint, apiKey });
-    try {
-      for (const segment of closed) {
-        const record = hasWork(segment)
-          ? recordOf(segment, { ...context, sessionEnded: ending && segment === all.at(-1) })
-          : undefined;
-        // A turn read before, written again by Claude Code or read again
-        // after the file shrank, is passed over: a run already sent by its
-        // id, and work that opens no turn by being no later than the last
-        // line of the session's own that was sent — never a background
-        // subagent's, whose work may run on past a continuation's start.
-        const times = timesOf(segment);
-        const old =
-          record !== undefined &&
-          (sent.has(record.runId) ||
-            (segment.opener === undefined && through !== undefined && (times[0] ?? 0) <= through));
-        if (record !== undefined && !old) {
-          if (!(await sender.send(record))) return;
-          sent.delete(record.runId);
-          sent.add(record.runId);
-        }
-        if (record !== undefined) for (const time of times) through = Math.max(through ?? time, time);
-        save(segment.end);
-      }
-    } finally {
-      await sender.close();
-    }
+    // The session's end is the last hook it gets: it reads on, a window at a
+    // time, to the transcript's end or a turn it cannot send yet.
+    while ((await pass(input, settings, deps, apiKey)) && input.event === 'SessionEnd');
   });
   if (!locked) deps.log('busy: another hook of this session held the lock past its wait; the next hook sends');
+}
+
+/**
+ * One window of the transcript, its ended turns sent in order as far as they
+ * can be, and the place after each saved; whether there is more to read past
+ * where it saved.
+ */
+async function pass(input: HookInput, settings: Settings, deps: Deps, apiKey: string): Promise<boolean> {
+  const state = readState(settings.dir, input.sessionId);
+  let read = readFrom(input.transcriptPath, state, deps.windowBytes);
+  if (read.lines.length === 0) {
+    if (read.skipTo === undefined) return false;
+    writeState(settings.dir, input.sessionId, placeAt(input.transcriptPath, state, read.skipTo));
+    return true;
+  }
+  let marked = state.marked === true || isMarked(read.lines);
+  let all = segments(read.lines, marked);
+  const stopping = input.event === 'Stop' || input.event === 'StopFailure';
+  if (stopping && !read.more && !hasEnded(all.at(-1)!)) {
+    await sleep(deps.lateLinesMs ?? LATE_LINES_MS);
+    read = readFrom(input.transcriptPath, state, deps.windowBytes);
+    marked = marked || isMarked(read.lines);
+    all = segments(read.lines, marked);
+  }
+  const { offset, more } = read;
+  // Where the file runs on past the window, the window's last segment may
+  // be cut midway, and waits for the next hook — unless it is all the
+  // window holds, a turn longer than the most a hook reads, sent in parts.
+  // Otherwise the last segment is the turn still going, unless the turn
+  // just stopped or the session is over; the ones before it have each been
+  // followed by another turn's opening.
+  const ending = input.event === 'SessionEnd' && !more;
+  const last = (segment: Segment): boolean =>
+    more ? all.length === 1 : ending || (stopping && hasEnded(segment));
+  const closed = all.filter((segment, index) => index < all.length - 1 || last(segment));
+  const sent = new Set(state.sent ?? []);
+  let through = state.through;
+  const save = (end: number): void => {
+    const next = placeAt(input.transcriptPath, state, end);
+    if (marked) next.marked = true;
+    if (sent.size > 0) next.sent = [...sent].slice(-SENT_KEPT);
+    if (through !== undefined) next.through = through;
+    writeState(settings.dir, input.sessionId, next);
+  };
+  if (closed.length === 0) {
+    if (offset !== state.offset || (marked && !state.marked)) save(offset);
+    return false;
+  }
+  const context: Context = {
+    sessionId: input.sessionId,
+    provider: settings.provider,
+    subagent: subagentsOf(input.transcriptPath),
+    sessionEnded: false,
+  };
+  let sender: ReturnType<Deps['sender']> | undefined;
+  try {
+    for (const segment of closed) {
+      // A subagent still at work in the background holds the turn that
+      // started it, and the turns after it, for a later hook, so its step
+      // holds all of its work; the session's end, which no hook follows,
+      // sends the turn as it is.
+      if (input.event !== 'SessionEnd' && waitsOnSubagent(segment, context)) return false;
+      const record = hasWork(segment)
+        ? recordOf(segment, { ...context, sessionEnded: ending && segment === all.at(-1) })
+        : undefined;
+      // A turn read before, written again by Claude Code or read again
+      // after the file shrank, is passed over: a run already sent by its
+      // id, and work that opens no turn by being no later than the last
+      // line of the session's own that was sent — never a background
+      // subagent's, whose work may run on past a continuation's start.
+      const times = timesOf(segment);
+      const old =
+        record !== undefined &&
+        (sent.has(record.runId) ||
+          (segment.opener === undefined && through !== undefined && (times[0] ?? 0) <= through));
+      if (record !== undefined && !old) {
+        sender ??= deps.sender({ endpoint: settings.endpoint, apiKey });
+        if (!(await sender.send(record))) return false;
+        sent.delete(record.runId);
+        sent.add(record.runId);
+      }
+      if (record !== undefined) for (const time of times) through = Math.max(through ?? time, time);
+      save(segment.end);
+    }
+  } finally {
+    await sender?.close();
+  }
+  return more;
 }

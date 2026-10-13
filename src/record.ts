@@ -30,6 +30,19 @@ const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 /** Subagents nest; past this depth one's transcript is not opened. */
 const MAX_DEPTH = 4;
 
+/**
+ * A tool's or a skill's name as Claude Code spells one, within the length
+ * the platform keeps of a name: anything else — a skill's name is the
+ * model's own writing — is no name, and is never sent.
+ */
+const NAME = /^[\w.:-]{1,128}$/;
+
+/** A model's id as providers spell one, within the length the platform keeps. */
+const MODEL = /^[\w.:@/[\]-]{1,128}$/;
+
+/** The most the platform keeps of a tag's value: past it, the tag would be dropped whole. */
+const TAG_MAX = 256;
+
 /** A version 5 UUID (RFC 9562): the same turn always gets the same run id. */
 export function uuid5(namespace: string, name: string): string {
   const hash = createHash('sha1').update(Buffer.from(namespace.replaceAll('-', ''), 'hex')).update(name, 'utf8').digest();
@@ -43,7 +56,12 @@ export function uuid5(namespace: string, name: string): string {
 export interface Subagent {
   /** The subagent's kind, as Claude Code names it: `Explore`, `general-purpose`, or one of the person's own. */
   type: string | undefined;
+  /** Its work up to the end of its first run: a later turn may resume it, and that is no part of this step. */
   entries: Entry[];
+  /** Whether its transcript shows that run ended; a subagent run in the background may still be at work. */
+  ended: boolean;
+  /** When its transcript was last written, in milliseconds since the epoch. */
+  touched: number;
 }
 
 export interface Context {
@@ -99,9 +117,16 @@ interface Found {
  * The model and tool calls among `entries`, each reply once however many
  * lines Claude Code wrote it in. A subagent's tool call, its transcript found,
  * is a step of the subagent's own calls at the top (`depth` 0), and below it
- * the subagent's calls beside the tool call that started it.
+ * the subagent's calls beside the tool call that started it. None starts
+ * before `floor`, the start of the run or the step it is part of.
  */
-function callsIn(entries: readonly Entry[], context: Context, depth: number, until: number | undefined): Found {
+function callsIn(
+  entries: readonly Entry[],
+  context: Context,
+  depth: number,
+  until: number | undefined,
+  floor: number,
+): Found {
   const found: Found = { items: [], skills: new Set(), last: undefined };
   const seen = (time: number | undefined): void => {
     if (time !== undefined && (found.last === undefined || time > found.last)) found.last = time;
@@ -134,7 +159,7 @@ function callsIn(entries: readonly Entry[], context: Context, depth: number, unt
         // written: the prompt, or the last tool's result.
         const call: ModelCallRecord = {
           type: 'model_call',
-          model: message.model,
+          model: MODEL.test(message.model) ? message.model : 'unknown',
           provider: context.provider,
           start: Math.min(previous ?? time, time),
           end: time,
@@ -148,7 +173,7 @@ function callsIn(entries: readonly Entry[], context: Context, depth: number, unt
         if (block.type !== 'tool_use' || typeof block.name !== 'string' || typeof block.id !== 'string') continue;
         if (block.name === 'Skill') {
           const skill = (block.input as { skill?: unknown } | null | undefined)?.skill;
-          if (typeof skill === 'string' && skill.trim() !== '') found.skills.add(skill.trim());
+          if (typeof skill === 'string' && NAME.test(skill.trim())) found.skills.add(skill.trim());
         }
         const result = results.get(block.id);
         const answered = result === undefined ? undefined : timeOf(result);
@@ -156,7 +181,8 @@ function callsIn(entries: readonly Entry[], context: Context, depth: number, unt
           result !== undefined && blocksOf(result).some((b) => b.tool_use_id === block.id && b.is_error === true);
         const subagent =
           depth < MAX_DEPTH && SUBAGENT_TOOLS.has(block.name) ? context.subagent(block.id) : undefined;
-        const inner = subagent === undefined ? undefined : callsIn(subagent.entries, context, depth + 1, until);
+        const inner =
+          subagent === undefined ? undefined : callsIn(subagent.entries, context, depth + 1, until, Math.max(floor, time));
         for (const skill of inner?.skills ?? []) found.skills.add(skill);
         if (subagent !== undefined && inner !== undefined && depth === 0) {
           // A subagent run in the background answers its tool call at once
@@ -169,12 +195,13 @@ function callsIn(entries: readonly Entry[], context: Context, depth: number, unt
             calls: inner.items.filter((item): item is CallRecord => item.type !== 'step'),
           };
           if (failed) step.errorType = 'ToolError';
-          else if (answered === undefined) step.cancelled = true;
+          else if (answered === undefined || !subagent.ended) step.cancelled = true;
           found.items.push(step);
           seen(Number(step.end));
           continue;
         }
-        const tool: ToolCallRecord = { type: 'tool_call', name: block.name, start: time, end: time };
+        const name = NAME.test(block.name) ? block.name : 'unknown';
+        const tool: ToolCallRecord = { type: 'tool_call', name, start: time, end: time };
         if (answered !== undefined) {
           tool.end = Math.max(answered, time);
           if (failed) tool.errorType = 'ToolError';
@@ -196,11 +223,49 @@ function callsIn(entries: readonly Entry[], context: Context, depth: number, unt
       previous = time;
     }
   }
+  // Claude Code writes a prompt's attachments a few milliseconds before the
+  // prompt, and a clock may step back: nothing starts before what holds it,
+  // and nothing ends before it starts, which the SDK would refuse whole.
+  for (const item of found.items) {
+    item.start = Math.max(floor, Number(item.start));
+    item.end = Math.max(Number(item.start), Number(item.end));
+  }
   // In the order they started, so the record, and the ids derived from each
   // span's place in it, come out the same however the lines were written.
   const order = new Map(found.items.map((item, index) => [item, index]));
   found.items.sort((a, b) => Number(a.start) - Number(b.start) || order.get(a)! - order.get(b)!);
   return found;
+}
+
+/** The subagents a segment's tool calls started, and theirs in turn, as deep as a record holds them. */
+export function subagentsIn(segment: Segment, context: Context): Subagent[] {
+  const found: Subagent[] = [];
+  const walk = (entries: readonly Entry[], depth: number): void => {
+    if (depth >= MAX_DEPTH) return;
+    for (const entry of entries) {
+      if (entry.type !== 'assistant' || (depth === 0 && entry.isSidechain)) continue;
+      for (const block of blocksOf(entry)) {
+        if (block.type !== 'tool_use' || typeof block.id !== 'string' || !SUBAGENT_TOOLS.has(block.name ?? '')) continue;
+        const subagent = context.subagent(block.id);
+        if (subagent === undefined) continue;
+        found.push(subagent);
+        walk(subagent.entries, depth + 1);
+      }
+    }
+  };
+  walk(segment.entries, 0);
+  return found;
+}
+
+/** Names joined into a tag, as many whole as the platform keeps of one. */
+function tagOf(names: readonly string[]): string {
+  let tag = '';
+  for (const name of names) {
+    const longer = tag === '' ? name : `${tag},${name}`;
+    if (longer.length > TAG_MAX) break;
+    tag = longer;
+  }
+  return tag;
 }
 
 /** The segment as a run, or nothing where it holds no time to place it at. */
@@ -216,7 +281,7 @@ export function recordOf(segment: Segment, context: Context): RunRecord | undefi
       lastTime = Math.max(lastTime ?? time, time);
     }
   }
-  const found = callsIn(main, context, 0, lastTime);
+  const found = callsIn(main, context, 0, lastTime, start);
   const record: RunRecord = {
     runId: uuid5(NAMESPACE, `${context.sessionId}/${first.uuid}`),
     agent: AGENT,
@@ -225,7 +290,7 @@ export function recordOf(segment: Segment, context: Context): RunRecord | undefi
     end: Math.max(start, lastTime ?? start, found.last ?? start),
     inside: found.items,
   };
-  if (found.skills.size > 0) record.tags = { skills: [...found.skills].sort().join(',') };
+  if (found.skills.size > 0) record.tags = { skills: tagOf([...found.skills].sort()) };
   const replies = main.filter((entry) => entry.type === 'assistant');
   const lastReply = replies.at(-1);
   const after = lastReply === undefined ? main : main.slice(main.lastIndexOf(lastReply) + 1);

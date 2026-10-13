@@ -127,6 +127,110 @@ describe('a turn as a run', () => {
     expect([Number(call.start), Number(call.end)]).toEqual([Date.parse(at(0)), Date.parse(at(2))]);
   });
 
+  it('starts no call before the turn, or the step, it is part of, whatever order the clocks wrote', () => {
+    const at = (ms: number): string => new Date(Date.UTC(2026, 9, 12, 9, 0, 0) + ms).toISOString();
+    const entries: Entry[] = [
+      { type: 'user', uuid: 'p', timestamp: at(0), turnPosition: {}, message: { content: '…' } },
+      // Claude Code writes a prompt's attachments a few milliseconds before the prompt itself.
+      { type: 'attachment', uuid: 'x', timestamp: at(-3) },
+      {
+        type: 'assistant',
+        uuid: 'a1',
+        timestamp: at(2_000),
+        message: { id: 'm1', model: 'claude-opus-5-5', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'Agent' }] },
+      },
+      { type: 'user', uuid: 'r1', timestamp: at(2_100), message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } },
+      // A reply written with a clock that ran behind.
+      { type: 'assistant', uuid: 'a2', timestamp: at(-60_000), message: { id: 'm2', model: 'claude-opus-5-5', stop_reason: 'end_turn', content: [] } },
+    ];
+    const inner: Entry[] = [
+      { type: 'user', uuid: 's0', timestamp: at(1_000), isSidechain: true, message: { content: '…' } },
+      { type: 'assistant', uuid: 's1', timestamp: at(1_500), isSidechain: true, message: { id: 'm3', model: 'claude-haiku-4-5', stop_reason: 'end_turn', content: [] } },
+    ];
+    const run = recordOf(
+      { opener: entries[0], entries, end: 0 },
+      {
+        sessionId: 's',
+        provider: 'anthropic',
+        subagent: () => ({ type: 'Explore', entries: inner, ended: true, touched: 0 }),
+        sessionEnded: false,
+      },
+    )!;
+    const items = run.inside!;
+    expect(items.length).toBe(3);
+    for (const item of items) {
+      expect(Number(item.start)).toBeGreaterThanOrEqual(Number(run.start));
+      expect(Number(item.end)).toBeGreaterThanOrEqual(Number(item.start));
+      expect(Number(item.end)).toBeLessThanOrEqual(Number(run.end));
+    }
+    const step = items.find((item): item is StepRecord => item.type === 'step')!;
+    expect(step.calls).toHaveLength(1);
+    expect(Number(step.calls![0]!.start)).toBeGreaterThanOrEqual(Number(step.start));
+    expect(Number(step.calls![0]!.end)).toBeGreaterThanOrEqual(Number(step.calls![0]!.start));
+  });
+
+  it('sends a name only as Claude Code spells one, and the skills within what the platform keeps of a tag', () => {
+    const at = (s: number): string => new Date(Date.UTC(2026, 9, 12, 9, 0, s)).toISOString();
+    const skills = Array.from({ length: 30 }, (_, index) => `plugin-${String(index).padStart(2, '0')}:skill-name`);
+    const entries: Entry[] = [
+      { type: 'user', uuid: 'p', timestamp: at(0), turnPosition: {}, message: { content: '…' } },
+      {
+        type: 'assistant',
+        uuid: 'a',
+        timestamp: at(1),
+        message: {
+          id: 'm',
+          model: 'a model said in words',
+          stop_reason: 'tool_use',
+          content: [
+            { type: 'tool_use', id: 't1', name: 'rm -rf /home/someone' },
+            { type: 'tool_use', id: 't2', name: 'x'.repeat(129) },
+            { type: 'tool_use', id: 't3', name: 'Skill', input: { skill: 'read /home/someone/notes.txt' } },
+            ...skills.map((skill, index) => ({ type: 'tool_use', id: `s${index}`, name: 'Skill', input: { skill } })),
+          ],
+        },
+      },
+    ];
+    const run = recordOf(
+      { opener: entries[0], entries, end: 0 },
+      { sessionId: 's', provider: 'anthropic', subagent: () => undefined, sessionEnded: true },
+    )!;
+    const json = JSON.stringify(run);
+    expect(json).not.toMatch(/someone|said in words|x{129}/);
+    const [call, ...tools] = run.inside! as [ModelCallRecord, ...ToolCallRecord[]];
+    expect(call.model).toBe('unknown');
+    expect(tools.slice(0, 3).map((tool) => tool.name)).toEqual(['unknown', 'unknown', 'Skill']);
+    const tagged = run.tags!['skills']!;
+    expect(tagged.length).toBeLessThanOrEqual(256);
+    expect(tagged.split(',')).toEqual(skills.slice(0, tagged.split(',').length));
+    expect(tagged.split(',').length).toBeGreaterThan(5);
+    const few = recordOf(
+      {
+        opener: entries[0],
+        entries: [
+          entries[0]!,
+          {
+            type: 'assistant',
+            uuid: 'b',
+            timestamp: at(1),
+            message: {
+              id: 'n',
+              model: 'claude-opus-5-5',
+              stop_reason: 'end_turn',
+              content: [
+                { type: 'tool_use', id: 'u1', name: 'Skill', input: { skill: 'anthropic-skills:pdf' } },
+                { type: 'tool_use', id: 'u2', name: 'Skill', input: { skill: 'a note from /home/someone' } },
+              ],
+            },
+          },
+        ],
+        end: 0,
+      },
+      { sessionId: 's', provider: 'anthropic', subagent: () => undefined, sessionEnded: false },
+    )!;
+    expect(few.tags).toEqual({ skills: 'anthropic-skills:pdf' });
+  });
+
   it('carries nothing of what was said: no text, no input, no path', () => {
     const records = JSON.stringify([...runsOf('subagent'), ...runsOf('interrupted')]);
     expect(records).not.toContain('…');

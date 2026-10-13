@@ -4,13 +4,20 @@
  * same turns at once.
  */
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 export interface SessionState {
   /** Where in the transcript the first turn not yet sent begins, in bytes. */
   offset: number;
+  /**
+   * What the line before `offset` was known by when it was saved (`markOf`):
+   * a transcript rewritten under the place reads otherwise there, and is read
+   * from the top.
+   */
+  mark?: string;
   /**
    * The runs sent, newest last, and when the last of them ended: Claude Code
    * can write a session's old lines into its transcript again, and shrink it,
@@ -40,6 +47,7 @@ export function readState(dir: string, sessionId: string): SessionState {
     const state: SessionState = {
       offset: typeof parsed.offset === 'number' && Number.isSafeInteger(parsed.offset) && parsed.offset >= 0 ? parsed.offset : 0,
     };
+    if (typeof parsed.mark === 'string') state.mark = parsed.mark;
     if (parsed.marked === true) state.marked = true;
     if (parsed.warnedNoKey === true) state.warnedNoKey = true;
     if (Array.isArray(parsed.sent)) state.sent = parsed.sent.filter((id): id is string => typeof id === 'string');
@@ -59,30 +67,35 @@ export function writeState(dir: string, sessionId: string, state: SessionState):
   renameSync(`${path}.tmp`, path);
 }
 
-/** A lock older than this was left by a hook that died holding it. */
+/** A lock untouched for this long was left by a hook that died holding it. */
 const STALE_MS = 120_000;
 
 /**
  * Holds the session's lock while `work` runs, waiting up to `waitMs` for a
  * hook already holding it; false, and `work` not run, if it never comes free.
+ * `staleMs` is the tests' way to shorten how long an untouched lock stands.
  */
 export async function withLock(
   dir: string,
   sessionId: string,
   waitMs: number,
   work: () => Promise<void>,
+  staleMs = STALE_MS,
 ): Promise<boolean> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${sessionId}.lock`);
+  // Written into the lock, so a hook lets go of its own lock and never of one
+  // another hook took from it, found stale after a sleep of the machine.
+  const token = `${process.pid}:${randomUUID()}`;
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
-      closeSync(openSync(path, 'wx', 0o600));
+      writeFileSync(path, token, { flag: 'wx', mode: 0o600 });
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       try {
-        if (Date.now() - statSync(path).mtimeMs > STALE_MS) rmSync(path, { force: true });
+        if (Date.now() - statSync(path).mtimeMs > staleMs) rmSync(path, { force: true });
       } catch {
         // Freed between the two calls.
       }
@@ -90,10 +103,26 @@ export async function withLock(
       await sleep(200);
     }
   }
+  // Touched while held: a hook still sending to a slow Telmoni is never taken
+  // for one that died, however long its sending takes.
+  const touch = setInterval(() => {
+    try {
+      const now = new Date();
+      utimesSync(path, now, now);
+    } catch {
+      // Taken away: the release below leaves it alone.
+    }
+  }, staleMs / 4);
+  touch.unref();
   try {
     await work();
   } finally {
-    rmSync(path, { force: true });
+    clearInterval(touch);
+    try {
+      if (readFileSync(path, 'utf8') === token) rmSync(path, { force: true });
+    } catch {
+      // Gone already.
+    }
   }
   return true;
 }
