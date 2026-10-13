@@ -1,0 +1,20 @@
+{
+  "name": "telmoni-plugins",
+  "description": "Telmoni's plugins for Claude Code, each installed from its npm package alone.",
+  "owner": {
+    "name": "Telmoni",
+    "email": "hello@telmoni.com",
+    "url": "https://telmoni.com"
+  },
+  "plugins": [
+    {
+      "name": "telmoni-observability",
+      "source": {
+        "source": "npm",
+        "package": "telmoni-claude-observability-plugin"
+      },
+      "description": "Records each turn of your Claude Code sessions in Telmoni as a run: the models, their tokens, the tools and the times. Never a prompt, a reply, a thought, a tool's input or output, or a path.",
+      "category": "monitoring"
+    }
+  ]
+}
