@@ -1,5 +1,5 @@
 /**
- * The hook Claude Code runs at `Stop`, `SubagentStop` and `SessionEnd`.
+ * The hook Claude Code runs at `Stop`, `StopFailure` and `SessionEnd`.
  *
  * It reads what Claude Code hands it, starts a detached copy of itself with
  * that, and exits at once: the session never waits on the network, and a
@@ -28,7 +28,11 @@ function readStdin(): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
-    const timer = setTimeout(() => reject(new Error('no hook input')), INPUT_WAIT_MS);
+    const timer = setTimeout(() => {
+      reject(new Error('no hook input'));
+      // Let go of it, or the process lives on for as long as it stays open.
+      process.stdin.destroy();
+    }, INPUT_WAIT_MS);
     process.stdin.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_INPUT_BYTES) {
