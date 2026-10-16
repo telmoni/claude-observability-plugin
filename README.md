@@ -4,6 +4,8 @@ Records each turn of your [Claude Code](https://code.claude.com) sessions in [Te
 
 ## Install
 
+The plugin is not on npm yet, so the install below waits for its package; until then, run it [from a checkout](#from-a-checkout).
+
 You need Claude Code, and Node.js 22 or later with npm on your `PATH`: Claude Code installs the plugin's npm package with your npm, and the hook runs on your Node.
 
 ```sh
@@ -11,7 +13,21 @@ claude plugin marketplace add telmoni/claude-observability-plugin --sparse .clau
 claude plugin install telmoni-observability@telmoni-plugins
 ```
 
-The marketplace is added sparse, so only its manifest is fetched; the plugin itself is the npm package [`telmoni-claude-observability-plugin`](https://www.npmjs.com/package/telmoni-claude-observability-plugin), its built hook alone.
+The marketplace is added sparse, so only its manifests and the repository's root files are fetched, never `src/` or `tests/`; the plugin itself is the npm package `telmoni-claude-observability-plugin`, its built hook alone.
+
+### From a checkout
+
+Build the plugin beside a checkout of [`telmoni/telmoni`](https://github.com/telmoni/telmoni), whose TypeScript SDK it is built on, and start Claude Code with it, your key in the environment:
+
+```sh
+git clone https://github.com/telmoni/telmoni.git
+git clone https://github.com/telmoni/claude-observability-plugin.git
+(cd telmoni/sdk/typescript && npm install && npm run build)
+(cd claude-observability-plugin && npm install && npm run build)
+TELMONI_API_KEY=telmoni_… claude --plugin-dir ./claude-observability-plugin
+```
+
+The session runs the hook last built; `TELMONI_ENDPOINT` in the same environment points it at a self-hosted Telmoni.
 
 ## Configure
 
@@ -40,7 +56,7 @@ A turn is sent once it has ended — one that started a subagent in the backgrou
 
 ## When something is wrong
 
-The hook never slows or interrupts a session: it hands its work to a detached process and exits at once. Anything that went wrong is a line in `~/.claude/telmoni/hook.log` (beside `CLAUDE_CONFIG_DIR` where you set one), naming what kind of thing went wrong and never anything from your session.
+The hook never slows or interrupts a session: it hands its work to a detached process and exits at once. Anything that went wrong is a line in `~/.claude/telmoni/hook.log` (under `CLAUDE_CONFIG_DIR` where you set one), naming what kind of thing went wrong and never anything from your session.
 
 ## Uninstall
 
