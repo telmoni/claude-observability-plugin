@@ -1,6 +1,6 @@
 # Telmoni for Claude Code — Agent Guidelines
 
-The Claude Code plugin for Telmoni ([`telmoni/claude-observability-plugin`](https://github.com/telmoni/claude-observability-plugin)): a hook that records each turn of a person's Claude Code sessions as a run, metadata only, through the TypeScript SDK of the platform ([`telmoni/telmoni`](https://github.com/telmoni/telmoni), `sdk/typescript`). It reaches a person's machine as the npm package `telmoni-claude-observability-plugin` alone, which this repository's marketplace, `telmoni-plugins`, names. The repository is public, and every file in it is published as written.
+The Claude Code plugin for Telmoni ([`telmoni/claude-observability-plugin`](https://github.com/telmoni/claude-observability-plugin)): a hook that records each turn of a person's Claude Code sessions as a run, metadata only, through the TypeScript SDK of the platform ([`telmoni/telmoni`](https://github.com/telmoni/telmoni), `sdk/typescript`). It reaches a person's machine as the npm package `@telmoni/claude-observability-plugin` alone, which this repository's marketplace, `telmoni-plugins`, names. The repository is public, and every file in it is published as written.
 
 ## Ground Rules
 - **Pre-launch:** nothing has shipped. Change the record, the state and the manifests to their ideal state; no migration paths.
@@ -21,11 +21,11 @@ The Claude Code plugin for Telmoni ([`telmoni/claude-observability-plugin`](http
 | `.claude-plugin/plugin.json`, `hooks/hooks.json` | The plugin, shipped in the package: its user configuration (the key, marked sensitive, which Claude Code keeps with its own credentials) and its three hooks. |
 | `.claude-plugin/marketplace.json` | The marketplace, `telmoni-plugins`, naming the npm package; added sparse, so an install never fetches `src/` or `tests/`. |
 | `ARCHITECTURE.md` | How the plugin works, and why. |
-| [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK this plugin is built on (`sdk/typescript`, `recordRun`), linked by path until the SDKs are published. |
+| [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK this plugin is built on (`sdk/typescript`, `recordRun`), which it takes from npm as `telmoni`. |
 | [`telmoni/docs`](https://github.com/telmoni/docs) | Sibling repo, checked out as `../docs`: the book, whose `api/coding-agents.mdx` documents this plugin. |
 
 ## Commands
-- **After every change** (no permission needed; report failures verbatim): `make check` — the types, the bundle and the suites (`npm run verify`), then `claude plugin validate --strict` on the marketplace and the plugin. The suites need `../telmoni/sdk/typescript` built (`npm run build` there).
+- **After every change** (no permission needed; report failures verbatim): `make check` — the types, the bundle and the suites (`npm run verify`), then `claude plugin validate --strict` on the marketplace and the plugin.
 - **Locally:** `claude --plugin-dir .` starts a Claude Code session with this checkout's plugin loaded, its hook the `dist/hook.mjs` last built; `TELMONI_API_KEY` and `TELMONI_ENDPOINT` reach it as the plugin's own configuration would.
 
 ## Code Rules

@@ -20,7 +20,7 @@ describe('the package', () => {
     const pkg = json('package.json');
     const plugin = json('.claude-plugin/plugin.json');
     const marketplace = json('.claude-plugin/marketplace.json');
-    expect(pkg['name']).toBe('telmoni-claude-observability-plugin');
+    expect(pkg['name']).toBe('@telmoni/claude-observability-plugin');
     expect(plugin['name']).toBe('telmoni-observability');
     expect(plugin['version']).toBe(pkg['version']);
     expect(marketplace['name']).toBe('telmoni-plugins');

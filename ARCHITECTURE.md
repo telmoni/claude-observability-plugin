@@ -66,9 +66,9 @@ Cursor runs Claude Code's hooks too, an installed plugin's among them, handing t
 
 ## What ships
 
-The npm package `telmoni-claude-observability-plugin` holds `.claude-plugin/plugin.json`, `hooks/hooks.json` and `dist/hook.mjs` — tsup's one bundle of the plugin, the SDK and OpenTelemetry — beside `package.json`, `README.md` and `LICENSE`, which npm always adds. Claude Code fetches it with the person's own npm (`npm view`, then `npm pack --ignore-scripts`, its integrity checked) and runs none of its scripts; it installs a package's dependencies only from a shrinkwrap, which this one, with none, does not ship. The hook needs Node 22 or later on `PATH` — the built hook runs on 22.0.0 — and nothing installed. `plugin.json`'s `version` is the package's, bumped with every release: an npm plugin without one is never updated. The marketplace is this repository's `.claude-plugin/marketplace.json`, added with `--sparse .claude-plugin`, so an install fetches the two manifests and the repository's root files, never `src/` or `tests/`.
+The npm package `@telmoni/claude-observability-plugin` holds `.claude-plugin/plugin.json`, `hooks/hooks.json` and `dist/hook.mjs` — tsup's one bundle of the plugin, the SDK and OpenTelemetry — beside `package.json`, `README.md` and `LICENSE`, which npm always adds. Claude Code fetches it with the person's own npm (`npm view`, then `npm pack --ignore-scripts`, its integrity checked) and runs none of its scripts; it installs a package's dependencies only from a shrinkwrap, which this one, with none, does not ship. The hook needs Node 22 or later on `PATH` — the built hook runs on 22.0.0 — and nothing installed. `plugin.json`'s `version` is the package's, bumped with every release: an npm plugin without one is never updated. The marketplace is this repository's `.claude-plugin/marketplace.json`, added with `--sparse .claude-plugin`, so an install fetches the two manifests and the repository's root files, never `src/` or `tests/`.
 
-Until the SDKs are published, the SDK is a development dependency by path (`file:../telmoni/sdk/typescript`), bundled at build; publishing this package waits on theirs, and the dependency becomes the registry's `telmoni` in the same change.
+The SDK is a development dependency, the registry's `telmoni`, bundled at build.
 
 ## Testing
 
