@@ -7,11 +7,11 @@ Records each turn of your [Claude Code](https://code.claude.com) sessions in [Te
 You need Claude Code, and Node.js 22 or later with npm on your `PATH`: Claude Code installs the plugin's npm package with your npm, and the hook runs on your Node.
 
 ```sh
-claude plugin marketplace add telmoni/claude-observability-plugin --sparse .claude-plugin
+claude plugin marketplace add telmoni/plugins
 claude plugin install telmoni-observability@telmoni-plugins
 ```
 
-The marketplace is added sparse, so only its manifests and the repository's root files are fetched, never `src/` or `tests/`; the plugin itself is the npm package [`@telmoni/claude-observability-plugin`](https://www.npmjs.com/package/@telmoni/claude-observability-plugin), its built hook alone.
+The marketplace is Telmoni's catalog, [`telmoni/plugins`](https://github.com/telmoni/plugins), which names each plugin by its npm package: this one is [`@telmoni/claude-observability-plugin`](https://www.npmjs.com/package/@telmoni/claude-observability-plugin), its built hook alone, so an install never fetches this repository's `src/` or `tests/`.
 
 ### From a checkout
 
