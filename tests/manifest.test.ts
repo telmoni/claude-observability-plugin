@@ -1,6 +1,6 @@
 /**
- * The package as Claude Code installs it: the plugin's manifest and hooks, and
- * what npm would publish.
+ * The package as Claude Code installs it: the marketplace naming the npm
+ * package, the plugin's manifest and hooks, and what npm would publish.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -16,12 +16,17 @@ function json(path: string): Record<string, unknown> {
 }
 
 describe('the package', () => {
-  it('is the plugin `telmoni-observability` that telmoni/plugins names, at the package’s own version', () => {
+  it('is the one plugin its marketplace names, by the npm package, at the package’s own version', () => {
     const pkg = json('package.json');
     const plugin = json('.claude-plugin/plugin.json');
+    const marketplace = json('.claude-plugin/marketplace.json');
     expect(pkg['name']).toBe('@telmoni/claude-observability-plugin');
     expect(plugin['name']).toBe('telmoni-observability');
     expect(plugin['version']).toBe(pkg['version']);
+    expect(marketplace['name']).toBe('telmoni-plugins');
+    expect(marketplace['plugins']).toEqual([
+      expect.objectContaining({ name: 'telmoni-observability', source: { source: 'npm', package: pkg['name'] } }),
+    ]);
   });
 
   it('asks for the key as a secret, and gives no option a default to stand ahead of the SDKs’ variables', () => {

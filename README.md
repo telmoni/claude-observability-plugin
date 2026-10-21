@@ -4,14 +4,14 @@ Records each turn of your [Claude Code](https://code.claude.com) sessions in [Te
 
 ## Install
 
-You need Claude Code, and Node.js 22 or later with npm on your `PATH`: Claude Code installs the plugin's npm package with your npm, and the hook runs on your Node.
+You need Claude Code, git, and Node.js 22 or later with npm on your `PATH`: Claude Code adds the marketplace with your git, installs the plugin's npm package with your npm, and the hook runs on your Node.
 
 ```sh
-claude plugin marketplace add telmoni/plugins
+claude plugin marketplace add telmoni/claude-observability-plugin
 claude plugin install telmoni-observability@telmoni-plugins
 ```
 
-The marketplace is Telmoni's catalog, [`telmoni/plugins`](https://github.com/telmoni/plugins), which names each plugin by its npm package: this one is [`@telmoni/claude-observability-plugin`](https://www.npmjs.com/package/@telmoni/claude-observability-plugin), its built hook alone, so an install never fetches this repository's `src/` or `tests/`.
+This repository is the marketplace, and it names the plugin by its npm package, [`@telmoni/claude-observability-plugin`](https://www.npmjs.com/package/@telmoni/claude-observability-plugin): Claude Code clones the repository for the catalog and installs the hook as built from npm, never from the clone.
 
 ### From a checkout
 
