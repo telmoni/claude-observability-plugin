@@ -4,7 +4,7 @@ Records each turn of your [Claude Code](https://code.claude.com) sessions in [Te
 
 ## Install
 
-You need Claude Code, git, and Node.js 22 or later with npm on your `PATH`: Claude Code adds the marketplace with your git, installs the plugin's npm package with your npm, and the hook runs on your Node.
+You need Claude Code, git, and Node.js 22.23.4, 24.22.1, 26.12.1 or later (October 2026's security releases) with npm on your `PATH`: Claude Code adds the marketplace with your git, installs the plugin's npm package with your npm, and the hook runs on your Node.
 
 ```sh
 claude plugin marketplace add telmoni/claude-observability-plugin
