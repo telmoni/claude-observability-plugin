@@ -4,7 +4,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
+import { builtinModules } from 'node:module';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
@@ -62,5 +64,13 @@ describe('the package', () => {
       'hooks/hooks.json',
       'package.json',
     ]);
+  });
+
+  it('bundles the hook into one file that needs nothing but Node', () => {
+    expect(readdirSync(join(ROOT, 'dist'))).toEqual(['hook.mjs']);
+    const bundle = readFileSync(join(ROOT, 'dist', 'hook.mjs'), 'utf8');
+    const imported = [...bundle.matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)["']([^"']+)["']/g)].map((match) => match[1]);
+    const builtins = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]));
+    expect(imported.filter((name) => !builtins.has(name!))).toEqual([]);
   });
 });

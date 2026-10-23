@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,6 +54,13 @@ async function until(check: () => boolean, ms: number): Promise<boolean> {
   return check();
 }
 
+/** Whether the copy is done with the session: its place saved at the transcript's end, and its lock let go. */
+function settled(claude: string, transcript: string): boolean {
+  const state = join(claude, 'telmoni', `${SESSION}.json`);
+  if (!existsSync(state) || existsSync(join(claude, 'telmoni', `${SESSION}.lock`))) return false;
+  return (JSON.parse(readFileSync(state, 'utf8')) as { offset: number }).offset === statSync(transcript).size;
+}
+
 describe('the hook', () => {
   it('exits at once, and its detached copy sends every ended turn and saves where it stopped', async () => {
     expect(existsSync(HOOK), 'build the hook first: npm run build').toBe(true);
@@ -81,10 +88,7 @@ describe('the hook', () => {
     expect(existsSync(state)).toBe(false);
     expect(code).toBe(0);
     expect(ms).toBeLessThan(1500);
-    const size = statSync(transcript).size;
-    expect(
-      await until(() => existsSync(state) && (JSON.parse(readFileSync(state, 'utf8')) as { offset: number }).offset === size, 20_000),
-    ).toBe(true);
+    expect(await until(() => settled(claude, transcript), 20_000)).toBe(true);
     expect(ingest.received).toHaveLength(3);
     const bodies = ingest.received.map((request) => request.body).join('');
     expect(bodies).not.toContain('…');
@@ -112,21 +116,44 @@ describe('the hook', () => {
       { CLAUDE_CONFIG_DIR: claude, CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY: KEY, CLAUDE_PLUGIN_OPTION_TELMONI_ENDPOINT: endpoint },
     );
     expect(code).toBe(0);
-    if (process.platform !== 'linux') return;
-    // The copy waits a moment before it reads: long enough to find it, by
-    // the home this test gave it, which only its environment shows.
-    const copies = readdirSync('/proc').flatMap((pid) => {
-      try {
-        const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
-        const env = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
-        return argv.includes(HOOK) && env.includes(`HOME=${home.path}`) ? [argv] : [];
-      } catch {
-        return [];
-      }
-    });
-    expect(copies).toHaveLength(1);
-    for (const secret of [KEY, SESSION, transcript]) expect(copies[0]).not.toContain(secret);
-    expect(await until(() => ingest.received.length > 0, 20_000)).toBe(true);
+    if (process.platform === 'linux') {
+      // Found, in the moment before it reads, by the home this test gave it, which only its environment shows.
+      const copies = readdirSync('/proc').flatMap((pid) => {
+        try {
+          const argv = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+          const env = readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0');
+          return argv.includes(HOOK) && env.includes(`HOME=${home.path}`) ? [argv] : [];
+        } catch {
+          return [];
+        }
+      });
+      expect(copies).toHaveLength(1);
+      for (const secret of [KEY, SESSION, transcript]) expect(copies[0]).not.toContain(secret);
+    }
+    // Over only once the copy is: one left running would write into the home this test removes.
+    expect(await until(() => settled(claude, transcript), 20_000)).toBe(true);
+    expect(ingest.received.length).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('logs a state it cannot read under its session, and leaves the state and the turns alone', async () => {
+    const claude = join(home.path, '.claude');
+    const transcript = join(claude, 'projects', 'p', `${SESSION}.jsonl`);
+    cpSync(fixture('interrupted'), transcript, { recursive: true });
+    const kept = join(claude, 'telmoni');
+    mkdirSync(kept, { recursive: true, mode: 0o700 });
+    // Torn as no hook leaves one, since each syncs its state before renaming it over the last.
+    writeFileSync(join(kept, `${SESSION}.json`), '{"offset":', { mode: 0o600 });
+    const { code } = await runHook(
+      { session_id: SESSION, transcript_path: transcript, hook_event_name: 'Stop' },
+      { CLAUDE_CONFIG_DIR: claude, CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY: KEY, CLAUDE_PLUGIN_OPTION_TELMONI_ENDPOINT: endpoint },
+    );
+    expect(code).toBe(0);
+    const logged = join(kept, 'hook.log');
+    // The line is the copy's last write.
+    expect(await until(() => existsSync(logged) && readFileSync(logged, 'utf8').endsWith('\n'), 20_000)).toBe(true);
+    expect(readFileSync(logged, 'utf8')).toMatch(/^\S+ Stop 0b1c2d3e: failed: SyntaxError\n$/);
+    expect(readFileSync(join(kept, `${SESSION}.json`), 'utf8')).toBe('{"offset":');
+    expect(ingest.received).toEqual([]);
   }, 30_000);
 
   it('exits, saying why, when Claude Code never closes its input', async () => {

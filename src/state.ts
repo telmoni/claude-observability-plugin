@@ -5,7 +5,18 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
@@ -32,6 +43,8 @@ export interface SessionState {
   marked?: boolean;
   /** Whether a missing key has been logged for this session, so it is logged once. */
   warnedNoKey?: boolean;
+  /** Whether an endpoint the SDK refused has been logged for this session, so it is logged once. */
+  warnedEndpoint?: boolean;
 }
 
 /** A session id names a file here: anything but a plain id is refused. */
@@ -41,29 +54,41 @@ export function isSessionId(value: unknown): value is string {
   return typeof value === 'string' && SESSION_ID.test(value);
 }
 
+/** The session's state: afresh only where none was saved, since one read as new would send the session again from the top. */
 export function readState(dir: string, sessionId: string): SessionState {
+  let text: string;
   try {
-    const parsed = JSON.parse(readFileSync(join(dir, `${sessionId}.json`), 'utf8')) as Partial<SessionState>;
-    const state: SessionState = {
-      offset: typeof parsed.offset === 'number' && Number.isSafeInteger(parsed.offset) && parsed.offset >= 0 ? parsed.offset : 0,
-    };
-    if (typeof parsed.mark === 'string') state.mark = parsed.mark;
-    if (parsed.marked === true) state.marked = true;
-    if (parsed.warnedNoKey === true) state.warnedNoKey = true;
-    if (Array.isArray(parsed.sent)) state.sent = parsed.sent.filter((id): id is string => typeof id === 'string');
-    if (typeof parsed.through === 'number' && Number.isFinite(parsed.through)) state.through = parsed.through;
-    return state;
-  } catch {
-    return { offset: 0 };
+    text = readFileSync(join(dir, `${sessionId}.json`), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { offset: 0 };
+    throw error;
   }
+  const value: unknown = JSON.parse(text);
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('session state is not an object');
+  const parsed = value as Partial<SessionState>;
+  const state: SessionState = {
+    offset: typeof parsed.offset === 'number' && Number.isSafeInteger(parsed.offset) && parsed.offset >= 0 ? parsed.offset : 0,
+  };
+  if (typeof parsed.mark === 'string') state.mark = parsed.mark;
+  if (parsed.marked === true) state.marked = true;
+  if (parsed.warnedNoKey === true) state.warnedNoKey = true;
+  if (parsed.warnedEndpoint === true) state.warnedEndpoint = true;
+  if (Array.isArray(parsed.sent)) state.sent = parsed.sent.filter((id): id is string => typeof id === 'string');
+  if (typeof parsed.through === 'number' && Number.isFinite(parsed.through)) state.through = parsed.through;
+  return state;
 }
 
 export function writeState(dir: string, sessionId: string, state: SessionState): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${sessionId}.json`);
-  // Written aside and renamed over, so a hook killed mid-write leaves the
-  // last state whole rather than half of the new one.
-  writeFileSync(`${path}.tmp`, JSON.stringify(state), { mode: 0o600 });
+  // Synced aside, then renamed over: a hook killed, or a machine stopped, mid-write leaves the last state whole.
+  const fd = openSync(`${path}.tmp`, 'w', 0o600);
+  try {
+    writeFileSync(fd, JSON.stringify(state));
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(`${path}.tmp`, path);
 }
 

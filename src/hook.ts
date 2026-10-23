@@ -54,10 +54,13 @@ function readStdin(): Promise<string> {
   });
 }
 
-const settings = settingsFrom(process.env);
 const handedOff = process.env[HANDOFF];
+// Set once the settings are read: a hook that cannot read them has nowhere to say so.
+let dir: string | undefined;
 
 try {
+  const settings = settingsFrom(process.env);
+  dir = settings.dir;
   if (handedOff === undefined) {
     const raw = JSON.parse(await readStdin()) as unknown;
     const input = inputFrom(raw);
@@ -80,12 +83,16 @@ try {
     if (input !== undefined) {
       const tag = `${input.event} ${input.sessionId.slice(0, 8)}:`;
       const write = (line: string): void => log(settings.dir, `${tag} ${line}`);
-      await sleep(SETTLE_MS);
-      await sync(input, settings, { sender: (destination) => new Sender(destination, write), log: write });
+      try {
+        await sleep(SETTLE_MS);
+        await sync(input, settings, { sender: (destination) => new Sender(destination, write), log: write });
+      } catch (error) {
+        write(`failed: ${kindOf(error)}`);
+      }
     }
   }
 } catch (error) {
-  log(settings.dir, `failed: ${kindOf(error)}`);
+  if (dir !== undefined) log(dir, `failed: ${kindOf(error)}`);
 }
 // Nothing the session could see: whatever happened is in hook.log.
 process.exitCode = 0;

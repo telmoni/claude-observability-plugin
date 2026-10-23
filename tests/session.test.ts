@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import type { RunRecord, StepRecord } from 'telmoni';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { type HookEvent, sync } from '../src/session';
+import { type Destination, Sender } from '../src/send';
+import { type Deps, type HookEvent, sync } from '../src/session';
 import type { Settings } from '../src/settings';
 import { readState, withLock } from '../src/state';
 import { fixture, tempDir } from './helpers';
@@ -42,7 +43,7 @@ function writtenThrough(count: number): string {
   return path;
 }
 
-function hook(event: HookEvent, path: string, overrides: Partial<Settings> = {}, lateLinesMs = 20): Promise<void> {
+function hook(event: HookEvent, path: string, overrides: Partial<Settings> = {}, more: Partial<Deps> = {}): Promise<void> {
   return sync({ event, sessionId: SESSION, transcriptPath: path }, { ...settings, ...overrides }, {
     sender: () => ({
       send: (record) => {
@@ -53,7 +54,8 @@ function hook(event: HookEvent, path: string, overrides: Partial<Settings> = {},
       close: () => Promise.resolve(),
     }),
     log: (line) => void logged.push(line),
-    lateLinesMs,
+    lateLinesMs: 20,
+    ...more,
   });
 }
 
@@ -136,7 +138,7 @@ describe('a hook', () => {
     const asking = lastAsking(second!, third!);
     const path = writtenThrough(asking + 1);
     setTimeout(() => append(path, lines.slice(asking + 1, third)), 100);
-    await hook('Stop', path, {}, 600);
+    await hook('Stop', path, {}, { lateLinesMs: 600 });
     expect(sent).toHaveLength(2);
   });
 
@@ -376,6 +378,28 @@ describe('a hook', () => {
     expect(logged).toHaveLength(1);
     expect(logged[0]).toMatch(/^no key/);
   });
+
+  it('names an endpoint the SDK refuses once, in the SDK’s own words, and sends nothing', async () => {
+    const path = writtenThrough(lines.length);
+    const real = { sender: (destination: Destination) => new Sender(destination, (line) => void logged.push(line)) };
+    await hook('Stop', path, { endpoint: 'http://telmoni.example.com' }, real);
+    await hook('Stop', path, { endpoint: 'http://telmoni.example.com' }, real);
+    expect(logged).toEqual([
+      "endpoint refused by the SDK (refusing to send the API key over unencrypted HTTP to 'telmoni.example.com'; use HTTPS): set another with /plugin configure, or TELMONI_ENDPOINT; nothing is sent until then",
+    ]);
+    expect(readState(settings.dir, SESSION).offset).toBe(0);
+  });
+});
+
+describe('the state', () => {
+  it('starts afresh only where none was saved, and throws on one it cannot read rather than send the session again', () => {
+    expect(readState(settings.dir, SESSION)).toEqual({ offset: 0 });
+    mkdirSync(settings.dir, { recursive: true });
+    for (const unreadable of ['{"offset":', '', 'null', '[]']) {
+      writeFileSync(join(settings.dir, `${SESSION}.json`), unreadable);
+      expect(() => readState(settings.dir, SESSION)).toThrow();
+    }
+  });
 });
 
 describe('a turn whose subagent works on in the background', () => {
@@ -476,6 +500,31 @@ describe('a turn whose subagent works on in the background', () => {
 });
 
 describe('the lock', () => {
+  it('is given up past its wait at a stop, which a later hook follows, and outwaited at the session’s end', async () => {
+    const path = writtenThrough(lines.length);
+    let entered: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const holder = withLock(settings.dir, SESSION, 1000, async () => {
+      entered();
+      await held;
+    });
+    await inside;
+    let ended = false;
+    const ending = hook('SessionEnd', path, {}, { lockWaitMs: 10 }).then(() => {
+      ended = true;
+    });
+    await hook('Stop', path, {}, { lockWaitMs: 10 });
+    expect(logged).toEqual(['busy: another hook of this session held the lock past its wait; the next hook sends']);
+    // The stop gave up after the session's end began to wait, and that waits on.
+    expect(ended).toBe(false);
+    release();
+    await Promise.all([holder, ending]);
+    expect(sent).toHaveLength(3);
+    expect(logged).toHaveLength(1);
+  });
+
   it('lets one hook of a session work at a time, and is free once it is done', async () => {
     const lockDir = join(dir.path, 'locks');
     const order: string[] = [];

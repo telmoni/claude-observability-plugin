@@ -7,14 +7,16 @@
 import { Telmoni } from 'telmoni';
 import type { Hooks, RunRecord } from 'telmoni';
 
-/**
- * How long one turn's export may take: past the SDK's own worst case for a
- * batch — three attempts of ten seconds at most, with waits of a minute at
- * most between them — so the flush settles on what the platform answered. A
- * turn the platform took late is then never counted as not sent and sent
- * again after the hour for which ingest's claim on a body answers a copy.
- */
-const FLUSH_SECONDS = 180;
+/** The most spans the SDK sends in one export; it sends a turn's exports one after another. */
+const BATCH_SPANS = 512;
+/** How many times the SDK sends one export before it drops the batch. */
+const ATTEMPTS = 3;
+/** How long the SDK gives each attempt. */
+const ATTEMPT_SECONDS = 10;
+/** The longest `Retry-After` the SDK waits between two attempts. */
+const RETRY_WAIT_SECONDS = 60;
+/** Past the exports' worst case, so a flush settles on what the platform answered rather than time out first. */
+const FLUSH_SLACK_SECONDS = 30;
 
 /**
  * How the SDK's warnings of an answer that took the export begin: the
@@ -22,6 +24,17 @@ const FLUSH_SECONDS = 180;
  * same way, so sending it again would only hold up the turns after it.
  */
 const TAKEN_IN_PART = 'telmoni: the server ';
+
+/** How long a turn's flush is waited for: each of its batches at the SDK's worst case, one after another, and the slack. */
+function flushSeconds(record: RunRecord): number {
+  // The run's own two spans, then one per item and one per call inside a step, as the SDK counts them.
+  const spans = (record.inside ?? []).reduce(
+    (count, item) => count + 1 + (item.type === 'step' ? (item.calls?.length ?? 0) : 0),
+    2,
+  );
+  const batchSeconds = ATTEMPTS * ATTEMPT_SECONDS + (ATTEMPTS - 1) * RETRY_WAIT_SECONDS;
+  return FLUSH_SLACK_SECONDS + Math.ceil(spans / BATCH_SPANS) * batchSeconds;
+}
 
 export interface Destination {
   endpoint: string | undefined;
@@ -64,7 +77,7 @@ export class Sender {
       this.#log(`turn refused by the SDK: ${error instanceof Error ? error.name : typeof error}`);
       return true;
     }
-    const flushed = await this.#telmoni.flush(FLUSH_SECONDS);
+    const flushed = await this.#telmoni.flush(flushSeconds(record));
     const warnings = this.#warnings.splice(0);
     const failures = warnings.filter((warning) => !warning.startsWith(TAKEN_IN_PART));
     if (flushed && failures.length === 0) {
