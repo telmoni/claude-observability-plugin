@@ -48,7 +48,7 @@ Each turn — from your prompt to Claude's last reply, or to your interruption �
 - each subagent, a step named by its kind (`subagent Explore`) holding its own model and tool calls;
 - the skills the turn ran, by name, as the tag `skills`.
 
-A turn is sent once it has ended — one that started a subagent in the background, once that subagent has finished too, so its step holds all of the subagent's work. If Telmoni cannot be reached, the next turn's hook sends it, and a turn sent again is the same bytes, which Telmoni stores once.
+A turn is sent once it has ended — one that started a subagent in the background, once that subagent has finished too, so its step holds all of the subagent's work. If Telmoni cannot be reached, the next turn's hook sends it, and a turn sent again is the same bytes, which Telmoni stores once within the hour.
 
 ## When something is wrong
 
