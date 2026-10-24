@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type Destination, Sender } from '../src/send';
 import { type Deps, type HookEvent, sync } from '../src/session';
 import type { Settings } from '../src/settings';
-import { readState, withLock } from '../src/state';
+import { readState, withLock, writeState } from '../src/state';
 import { fixture, tempDir } from './helpers';
 
 let dir: { path: string; remove: () => void };
@@ -43,6 +43,9 @@ function writtenThrough(count: number): string {
   return path;
 }
 
+/** A sender that takes every turn. */
+const taking: Deps['sender'] = () => ({ send: (record) => (sent.push(record), Promise.resolve(true)), close: () => Promise.resolve() });
+
 function hook(event: HookEvent, path: string, overrides: Partial<Settings> = {}, more: Partial<Deps> = {}): Promise<void> {
   return sync({ event, sessionId: SESSION, transcriptPath: path }, { ...settings, ...overrides }, {
     sender: () => ({
@@ -62,6 +65,19 @@ function hook(event: HookEvent, path: string, overrides: Partial<Settings> = {},
 const append = (path: string, more: string[]): void =>
   writeFileSync(path, more.map((line) => `${line}\n`).join(''), { flag: 'a' });
 
+/** The reply Claude Code writes as it resumes a session whose last line was no reply, as it writes it. */
+const placeholder = (timestamp: string): string =>
+  JSON.stringify({
+    type: 'assistant',
+    uuid: '00000000-0000-4000-8000-999999999990',
+    timestamp,
+    isApiErrorMessage: false,
+    message: { id: 'msg_placeholder', model: '<synthetic>', stop_reason: 'stop_sequence', usage: { input_tokens: 0, output_tokens: 0 }, content: [{ type: 'text', text: 'No response requested.' }] },
+  });
+
+/** A line longer than any window the tests read. */
+const huge = JSON.stringify({ type: 'attachment', uuid: 'huge', timestamp: '2026-10-12T09:00:00.000Z', padding: 'x'.repeat(200_000) });
+
 /** The same work as new turns: every id renamed, every time two hours on. */
 const renamed = (from: string[]): string[] =>
   from.map((line) =>
@@ -77,7 +93,7 @@ const renamed = (from: string[]): string[] =>
 async function catchUp(path: string, windowBytes: number): Promise<void> {
   for (let previous = -1; ; ) {
     await sync({ event: 'Stop', sessionId: SESSION, transcriptPath: path }, settings, {
-      sender: () => ({ send: (record) => (sent.push(record), Promise.resolve(true)), close: () => Promise.resolve() }),
+      sender: taking,
       log: (line) => void logged.push(line),
       lateLinesMs: 0,
       windowBytes,
@@ -159,6 +175,52 @@ describe('a hook', () => {
     await hook('StopFailure', path);
     expect(sent).toHaveLength(2);
     expect(sent[1]!.errorType).toBe('overloaded');
+  });
+
+  it('names an API error Claude Code gives no plain kind `api_error`, never by its text', async () => {
+    const [, second] = openings();
+    const path = writtenThrough(second! + 1);
+    const opener = JSON.parse(lines[second!]!) as { timestamp: string };
+    append(path, [
+      JSON.stringify({
+        type: 'assistant',
+        uuid: '00000000-0000-4000-8000-999999999997',
+        timestamp: new Date(Date.parse(opener.timestamp) + 2000).toISOString(),
+        isApiErrorMessage: true,
+        error: 'Rate limited: try again in 30 seconds',
+        message: { model: '<synthetic>', content: [] },
+      }),
+    ]);
+    await hook('StopFailure', path);
+    expect(sent[1]!.errorType).toBe('api_error');
+    expect(JSON.stringify(sent)).not.toContain('Rate limited');
+  });
+
+  it('sends no run of the reply Claude Code writes as it resumes a session', async () => {
+    const path = writtenThrough(lines.length);
+    await hook('Stop', path);
+    expect(sent).toHaveLength(3);
+    const last = JSON.parse(lines.at(-1)!) as { timestamp: string };
+    append(path, [placeholder(new Date(Date.parse(last.timestamp) + 2 * 86_400_000).toISOString())]);
+    await hook('SessionEnd', path);
+    expect(sent).toHaveLength(3);
+    expect(readState(settings.dir, SESSION).offset).toBe(readFileSync(path).length);
+  });
+
+  it('keeps a turn interrupted before the session was resumed cancelled, ended where it was interrupted', async () => {
+    const [, second, third] = openings();
+    const asking = lastAsking(second!, third!);
+    const path = writtenThrough(asking + 1);
+    const at = Date.parse((JSON.parse(lines[asking]!) as { timestamp: string }).timestamp);
+    append(path, [
+      JSON.stringify({ type: 'user', uuid: '00000000-0000-4000-8000-999999999991', timestamp: new Date(at + 1000).toISOString(), message: { content: [{ type: 'text', text: '[Request interrupted by user for tool use]' }] } }),
+      placeholder(new Date(at + 2 * 86_400_000).toISOString()),
+    ]);
+    await hook('Stop', path);
+    expect(sent).toHaveLength(2);
+    expect(sent[1]!.cancelled).toBe(true);
+    expect(sent[1]!.errorType).toBeUndefined();
+    expect(Number(sent[1]!.end)).toBeLessThanOrEqual(at + 1000);
   });
 
   it('sends nothing again when Claude Code writes old lines into the transcript a second time', async () => {
@@ -300,7 +362,7 @@ describe('a hook', () => {
   it('reads on to the transcript’s end as the session ends, there being no hook after', async () => {
     const path = writtenThrough(lines.length);
     await sync({ event: 'SessionEnd', sessionId: SESSION, transcriptPath: path }, settings, {
-      sender: () => ({ send: (record) => (sent.push(record), Promise.resolve(true)), close: () => Promise.resolve() }),
+      sender: taking,
       log: (line) => void logged.push(line),
       lateLinesMs: 0,
       windowBytes: 10_000,
@@ -342,8 +404,7 @@ describe('a hook', () => {
     const path = writtenThrough(lines.length);
     await hook('Stop', path);
     expect(sent).toHaveLength(3);
-    // Rewritten, not appended to: its old turns trimmed, two new ones after,
-    // and the file no smaller than where the last hook stopped.
+    // Rewritten, not appended to: old turns trimmed, two new ones after, the file no smaller than where the last hook stopped.
     const rewritten = [...lines.slice(third), ...renamed(lines.slice(0, third)), lines[1]!];
     writeFileSync(path, rewritten.map((line) => `${line}\n`).join(''));
     expect(readFileSync(path).length).toBeGreaterThanOrEqual(readState(settings.dir, SESSION).offset);
@@ -356,16 +417,36 @@ describe('a hook', () => {
   it('passes over a line longer than a window, as it does a line it cannot read', async () => {
     const [, second, third] = openings();
     const path = writtenThrough(second!);
-    const huge = JSON.stringify({ type: 'attachment', uuid: 'huge', timestamp: '2026-10-12T09:00:00.000Z', padding: 'x'.repeat(200_000) });
     append(path, [huge, ...lines.slice(second, third)]);
     for (let hook = 0; hook < 6; hook++) {
       await sync({ event: 'Stop', sessionId: SESSION, transcriptPath: path }, settings, {
-        sender: () => ({ send: (record) => (sent.push(record), Promise.resolve(true)), close: () => Promise.resolve() }),
+        sender: taking,
         log: (line) => void logged.push(line),
         lateLinesMs: 0,
         windowBytes: 100_000,
       });
     }
+    expect(sent).toHaveLength(2);
+    expect(readState(settings.dir, SESSION).offset).toBe(readFileSync(path).length);
+  });
+
+  it('passes over a line longer than a window that it opens', async () => {
+    const [, second, third] = openings();
+    const path = writtenThrough(second!);
+    await catchUp(path, 100_000);
+    expect(sent).toHaveLength(1);
+    append(path, [huge, ...lines.slice(second, third)]);
+    await catchUp(path, 100_000);
+    expect(sent).toHaveLength(2);
+    expect(readState(settings.dir, SESSION).offset).toBe(readFileSync(path).length);
+  });
+
+  it('reads on past a line a crash tore, before a line longer than a window', async () => {
+    const [, second, third] = openings();
+    const path = writtenThrough(second!);
+    await catchUp(path, 100_000);
+    append(path, ['{"type":"user","uuid":"torn', huge, ...lines.slice(second, third)]);
+    await catchUp(path, 100_000);
     expect(sent).toHaveLength(2);
     expect(readState(settings.dir, SESSION).offset).toBe(readFileSync(path).length);
   });
@@ -377,6 +458,44 @@ describe('a hook', () => {
     expect(sent).toEqual([]);
     expect(logged).toHaveLength(1);
     expect(logged[0]).toMatch(/^no key/);
+    expect(readState(settings.dir, SESSION).warnedNoKey).toBe(true);
+  });
+
+  it('logs a missing key only under the session’s lock, so no hook’s save is written over', async () => {
+    const path = writtenThrough(lines.length);
+    let entered: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const holder = withLock(settings.dir, SESSION, 1000, async () => {
+      entered();
+      await held;
+    });
+    await inside;
+    await hook('Stop', path, { apiKey: undefined }, { lockWaitMs: 10 });
+    expect(logged).toEqual(['busy: another hook of this session held the lock past its wait; the next hook sends']);
+    release();
+    await holder;
+    await hook('Stop', path, { apiKey: undefined });
+    expect(logged.at(-1)).toMatch(/^no key/);
+  });
+
+  it('waits on no lock to say again what it said already', async () => {
+    const path = writtenThrough(lines.length);
+    await hook('Stop', path, { apiKey: undefined });
+    let entered: () => void = () => undefined;
+    let release: () => void = () => undefined;
+    const inside = new Promise<void>((resolve) => (entered = resolve));
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const holder = withLock(settings.dir, SESSION, 1000, async () => {
+      entered();
+      await held;
+    });
+    await inside;
+    await hook('Stop', path, { apiKey: undefined }, { lockWaitMs: 60_000 });
+    release();
+    await holder;
+    expect(logged).toEqual([expect.stringMatching(/^no key/) as unknown]);
   });
 
   it('names an endpoint the SDK refuses once, in the SDK’s own words, and sends nothing', async () => {
@@ -387,7 +506,7 @@ describe('a hook', () => {
     expect(logged).toEqual([
       "endpoint refused by the SDK (refusing to send the API key over unencrypted HTTP to 'telmoni.example.com'; use HTTPS): set another with /plugin configure, or TELMONI_ENDPOINT; nothing is sent until then",
     ]);
-    expect(readState(settings.dir, SESSION).offset).toBe(0);
+    expect(readState(settings.dir, SESSION)).toMatchObject({ offset: 0, warnedEndpoint: true });
   });
 });
 
@@ -399,6 +518,15 @@ describe('the state', () => {
       writeFileSync(join(settings.dir, `${SESSION}.json`), unreadable);
       expect(() => readState(settings.dir, SESSION)).toThrow();
     }
+  });
+
+  it('is written through a file named for its own process, leaving any other writer’s alone', () => {
+    mkdirSync(settings.dir, { recursive: true });
+    const others = [`${SESSION}.json.tmp`, `${SESSION}.json.${process.pid + 1}.tmp`].map((name) => join(settings.dir, name));
+    for (const other of others) writeFileSync(other, 'theirs');
+    writeState(settings.dir, SESSION, { offset: 7 });
+    expect(others.map((other) => readFileSync(other, 'utf8'))).toEqual(['theirs', 'theirs']);
+    expect(readState(settings.dir, SESSION)).toEqual({ offset: 7 });
   });
 });
 
@@ -418,7 +546,7 @@ describe('a turn whose subagent works on in the background', () => {
     writeFileSync(subagentPath(), soFar.map((line) => `${line}\n`).join(''));
   }
 
-  /** The calls in the subagent's whole transcript, counted apart from the plugin: a model call per reply, a tool call per tool asked for. */
+  /** The calls in the subagent's whole transcript, counted apart from the plugin: a model call per reply, a tool call per tool. */
   function subagentCalls(): number {
     const replies = new Set<string>();
     let tools = 0;
@@ -454,7 +582,7 @@ describe('a turn whose subagent works on in the background', () => {
     subagentSoFar();
     const path = writtenThrough(lines.length);
     await sync({ event: 'SessionEnd', sessionId: SESSION, transcriptPath: path }, settings, {
-      sender: () => ({ send: (record) => (sent.push(record), Promise.resolve(true)), close: () => Promise.resolve() }),
+      sender: taking,
       log: (line) => void logged.push(line),
       lateLinesMs: 0,
       windowBytes: 40_000,
@@ -496,6 +624,83 @@ describe('a turn whose subagent works on in the background', () => {
     await hook('Stop', path);
     expect(sent).toHaveLength(1);
     expect(stepOf(sent[0]!).cancelled).toBe(true);
+  });
+
+  /** The subagent's transcript with a reply cut off at its output's limit before its first, and, unless `alone`, Claude Code's word to go on. */
+  function cutOff(alone = false): void {
+    const original = subagentLines();
+    const first = original.findIndex((line) => (JSON.parse(line) as { type?: string }).type === 'assistant');
+    const timestamp = (JSON.parse(original[first]!) as { timestamp: string }).timestamp;
+    const cut = [
+      JSON.stringify({ type: 'assistant', uuid: '00000000-0000-4000-9000-000000000003', timestamp, isSidechain: true, message: { id: 'msg_cut', model: 'claude-opus-5-5', stop_reason: 'max_tokens', usage: { input_tokens: 5, output_tokens: 5 }, content: [{ type: 'text', text: '…' }] } }),
+      JSON.stringify({ type: 'user', uuid: '00000000-0000-4000-9000-000000000004', timestamp, isSidechain: true, isMeta: true, turnCompanion: true, message: { content: 'Output token limit hit. Resume directly' } }),
+    ];
+    const written = alone ? [...original.slice(0, first), cut[0]!] : [...original.slice(0, first), ...cut, ...original.slice(first)];
+    writeFileSync(subagentPath(), written.map((line) => `${line}\n`).join(''));
+  }
+
+  it('holds all of a subagent’s run that went on past a reply cut off at its output’s limit', async () => {
+    cutOff();
+    await hook('Stop', writtenThrough(lines.length));
+    expect(sent).toHaveLength(3);
+    expect(stepOf(sent[0]!).calls).toHaveLength(subagentCalls() + 1);
+    expect(stepOf(sent[0]!).cancelled).toBeUndefined();
+  });
+
+  it('is held while a subagent cut off at its output’s limit has yet to go on', async () => {
+    const [, second] = openings();
+    cutOff(true);
+    await hook('Stop', writtenThrough(second!));
+    expect(sent).toEqual([]);
+  });
+
+  /** The subagent's transcript up to its first reply, then `more`. */
+  function subagentThen(more: object[]): void {
+    const original = subagentLines();
+    const first = original.findIndex((line) => (JSON.parse(line) as { type?: string }).type === 'assistant');
+    const timestamp = (JSON.parse(original[first]!) as { timestamp: string }).timestamp;
+    const lines = more.map((line, index) => JSON.stringify({ uuid: `00000000-0000-4000-9000-00000000010${index}`, timestamp, isSidechain: true, ...line }));
+    writeFileSync(subagentPath(), [...original.slice(0, first), ...lines].map((line) => `${line}\n`).join(''));
+  }
+
+  it('holds a subagent’s run past a reply a classifier cut off, its calls not run, and the word to go on', async () => {
+    const usage = { input_tokens: 5, output_tokens: 5 };
+    subagentThen([
+      { type: 'assistant', message: { id: 'msg_refused', model: 'claude-opus-5-5', stop_reason: 'refusal', usage, content: [{ type: 'tool_use', id: 'toolu_refused', name: 'Bash' }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_refused', is_error: true, content: 'Not run' }] } },
+      { type: 'user', isMeta: true, turnCompanion: true, message: { content: 'Your response above was stopped by a safety classifier' } },
+      { type: 'assistant', message: { id: 'msg_after', model: 'claude-opus-5-5', stop_reason: 'end_turn', usage, content: [{ type: 'text', text: '…' }] } },
+    ]);
+    await hook('Stop', writtenThrough(lines.length));
+    expect(sent).toHaveLength(3);
+    expect(stepOf(sent[0]!).calls!.filter((call) => call.type === 'model_call')).toHaveLength(2);
+    expect(stepOf(sent[0]!).cancelled).toBeUndefined();
+  });
+
+  it('ends a subagent’s run at a refusal Claude Code gave up on, an API error, though the main agent writes to it after', async () => {
+    subagentThen([
+      { type: 'assistant', isApiErrorMessage: true, error: 'invalid_request', message: { model: '<synthetic>', stop_reason: 'refusal', content: [] } },
+      { type: 'user', isMeta: true, origin: { kind: 'coordinator' }, message: { content: '…' } },
+      { type: 'assistant', message: { id: 'msg_resumed', model: 'claude-opus-5-5', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'toolu_resumed', name: 'Bash' }] } },
+    ]);
+    const [, second] = openings();
+    await hook('Stop', writtenThrough(second!));
+    expect(sent).toHaveLength(1);
+    expect(stepOf(sent[0]!).calls!.some((call) => call.type === 'tool_call' && call.name === 'Bash')).toBe(false);
+  });
+
+  it('ends a subagent’s run at a refusal Claude Code gave up on, its last line', async () => {
+    subagentThen([{ type: 'assistant', isApiErrorMessage: true, error: 'invalid_request', message: { model: '<synthetic>', stop_reason: 'refusal', content: [] } }]);
+    const [, second] = openings();
+    await hook('Stop', writtenThrough(second!));
+    expect(sent).toHaveLength(1);
+  });
+
+  it('is held while a subagent stopped at the context window’s end has yet to go on', async () => {
+    const [, second] = openings();
+    subagentThen([{ type: 'assistant', message: { id: 'msg_full', model: 'claude-opus-5-5', stop_reason: 'model_context_window_exceeded', content: [{ type: 'text', text: '…' }] } }]);
+    await hook('Stop', writtenThrough(second!));
+    expect(sent).toEqual([]);
   });
 });
 
@@ -581,6 +786,19 @@ describe('the lock', () => {
       writeFileSync(lock, 'another hook');
     });
     expect(readFileSync(lock, 'utf8')).toBe('another hook');
+  });
+
+  it('is taken from a hook that died, once untouched past its stale time, and holds the taker’s own token', async () => {
+    const lockDir = join(dir.path, 'locks');
+    mkdirSync(lockDir, { recursive: true });
+    const lock = join(lockDir, `${SESSION}.lock`);
+    writeFileSync(lock, '1:a-dead-hook');
+    const old = new Date(Date.now() - 3 * 60_000);
+    utimesSync(lock, old, old);
+    let token = '';
+    expect(await withLock(lockDir, SESSION, 1000, async () => void (token = readFileSync(lock, 'utf8')))).toBe(true);
+    expect(token).toMatch(new RegExp(`^${process.pid}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`));
+    expect(existsSync(lock)).toBe(false);
   });
 
   it('is kept in a folder only its owner can open, readable by its owner alone', async () => {

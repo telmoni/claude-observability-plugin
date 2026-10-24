@@ -169,6 +169,37 @@ describe('a turn as a run', () => {
     expect(Number(step.calls![0]!.end)).toBeGreaterThanOrEqual(Number(step.calls![0]!.start));
   });
 
+  it('keeps a tool’s name up to the 145 characters the platform keeps of one', () => {
+    const at = (s: number): string => new Date(Date.UTC(2026, 9, 12, 9, 0, s)).toISOString();
+    const name = `mcp__${'s'.repeat(60)}__${'t'.repeat(78)}`;
+    const entries: Entry[] = [
+      { type: 'user', uuid: 'p', timestamp: at(0), turnPosition: {}, message: { content: '…' } },
+      { type: 'assistant', uuid: 'a', timestamp: at(1), message: { id: 'm', model: 'claude-opus-5-5', stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name }] } },
+    ];
+    const run = recordOf({ opener: entries[0], entries, end: 0 }, { sessionId: 's', provider: 'anthropic', subagent: () => undefined, sessionEnded: true })!;
+    expect(name).toHaveLength(145);
+    expect((run.inside! as ToolCallRecord[]).filter((item) => item.type === 'tool_call').map((tool) => tool.name)).toEqual([name]);
+  });
+
+  it('sends a model’s id as Claude Code spells it, a model file’s own name for its path, and never a path', () => {
+    const at = (s: number): string => new Date(Date.UTC(2026, 9, 12, 9, 0, s)).toISOString();
+    const sent = (model: string): string => {
+      const entries: Entry[] = [
+        { type: 'user', uuid: 'p', timestamp: at(0), turnPosition: {}, message: { content: '…' } },
+        { type: 'assistant', uuid: 'a', timestamp: at(1), message: { id: 'm', model, stop_reason: 'end_turn', content: [] } },
+      ];
+      const run = recordOf({ opener: entries[0], entries, end: 0 }, { sessionId: 's', provider: 'anthropic', subagent: () => undefined, sessionEnded: true })!;
+      return (run.inside![0] as ModelCallRecord).model;
+    };
+    for (const model of ['claude-opus-5-5', 'claude-sonnet-4-5[1m]', 'anthropic/claude-sonnet-4.5', 'us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'qwen3-coder:30b', 'x.gguf']) {
+      expect(sent(model)).toBe(model);
+    }
+    expect(sent('/home/someone/models/qwen3-coder-30b-q4_k_m.gguf')).toBe('qwen3-coder-30b-q4_k_m.gguf');
+    expect(sent('models/x.gguf')).toBe('x.gguf');
+    expect(sent('C:\\Users\\someone\\models\\x.safetensors')).toBe('x.safetensors');
+    for (const path of ['/home/someone/models/llama', './models/x', '../x', 'file:///home/someone/m']) expect(sent(path)).toBe('unknown');
+  });
+
   it('sends a name only as Claude Code spells one, and the skills within what the platform keeps of a tag', () => {
     const at = (s: number): string => new Date(Date.UTC(2026, 9, 12, 9, 0, s)).toISOString();
     const skills = Array.from({ length: 30 }, (_, index) => `plugin-${String(index).padStart(2, '0')}:skill-name`);
@@ -184,7 +215,7 @@ describe('a turn as a run', () => {
           stop_reason: 'tool_use',
           content: [
             { type: 'tool_use', id: 't1', name: 'rm -rf /home/someone' },
-            { type: 'tool_use', id: 't2', name: 'x'.repeat(129) },
+            { type: 'tool_use', id: 't2', name: 'x'.repeat(146) },
             { type: 'tool_use', id: 't3', name: 'Skill', input: { skill: 'read /home/someone/notes.txt' } },
             ...skills.map((skill, index) => ({ type: 'tool_use', id: `s${index}`, name: 'Skill', input: { skill } })),
           ],
@@ -196,7 +227,7 @@ describe('a turn as a run', () => {
       { sessionId: 's', provider: 'anthropic', subagent: () => undefined, sessionEnded: true },
     )!;
     const json = JSON.stringify(run);
-    expect(json).not.toMatch(/someone|said in words|x{129}/);
+    expect(json).not.toMatch(/someone|said in words|x{146}/);
     const [call, ...tools] = run.inside! as [ModelCallRecord, ...ToolCallRecord[]];
     expect(call.model).toBe('unknown');
     expect(tools.slice(0, 3).map((tool) => tool.name)).toEqual(['unknown', 'unknown', 'Skill']);

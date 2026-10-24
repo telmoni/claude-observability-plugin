@@ -48,7 +48,7 @@ describe('the package', () => {
     }
   });
 
-  it('packs the built hook and its manifests, and nothing else', () => {
+  it('packs the built hook, its manifests and its license, and nothing else: its README stays on GitHub', () => {
     const out = execFileSync('npm', ['pack', '--dry-run', '--json'], {
       cwd: ROOT,
       encoding: 'utf8',
@@ -59,7 +59,6 @@ describe('the package', () => {
     expect(pack.files.map((file) => file.path).sort()).toEqual([
       '.claude-plugin/plugin.json',
       'LICENSE',
-      'README.md',
       'dist/hook.mjs',
       'hooks/hooks.json',
       'package.json',

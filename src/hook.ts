@@ -1,10 +1,6 @@
 /**
- * The hook Claude Code runs at `Stop`, `StopFailure` and `SessionEnd`.
- *
- * It reads what Claude Code hands it, starts a detached copy of itself with
- * that, and exits at once: the session never waits on the network, and a
- * Telmoni that does not answer never slows it. The copy waits for the turn's
- * last lines to be written, then sends what has ended (`session.ts`).
+ * The hook Claude Code runs at `Stop`, `StopFailure` and `SessionEnd`: it hands what it is given to a detached copy of
+ * itself and exits at once, so the session never waits on the network; the copy sends what has ended (`session.ts`).
  */
 
 import { spawn } from 'node:child_process';
@@ -29,7 +25,7 @@ function readStdin(): Promise<string> {
     const chunks: Buffer[] = [];
     let size = 0;
     const timer = setTimeout(() => {
-      reject(new Error('no hook input'));
+      reject(Object.assign(new Error('no hook input'), { name: 'NoHookInput' }));
       // Let go of it, or the process lives on for as long as it stays open.
       process.stdin.destroy();
     }, INPUT_WAIT_MS);

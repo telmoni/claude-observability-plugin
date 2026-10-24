@@ -1,8 +1,6 @@
 /**
- * A segment of a transcript as a run record: the turn a run of `claude-code`,
- * the session its session, each reply of the model a model call, each tool a
- * tool call, each subagent a step with its own calls inside it, and the
- * skills the turn ran its tag `skills`.
+ * A segment of a transcript as a run record: the turn a run of `claude-code`, each reply a model call, each tool a
+ * tool call, each subagent a step with its own calls inside it, and the skills the turn ran its tag `skills`.
  */
 
 import { createHash } from 'node:crypto';
@@ -31,14 +29,25 @@ const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 const MAX_DEPTH = 4;
 
 /**
- * A tool's or a skill's name as Claude Code spells one, within the length
- * the platform keeps of a name: anything else — a skill's name is the
- * model's own writing — is no name, and is never sent.
+ * A tool's or a skill's name as Claude Code spells one, within the length the platform keeps of a name: anything
+ * else — a skill's name is the model's own writing — is no name, and is never sent.
  */
-const NAME = /^[\w.:-]{1,128}$/;
+const NAME = /^[\w.:-]{1,145}$/;
 
 /** A model's id as providers spell one, within the length the platform keeps. */
 const MODEL = /^[\w.:@/[\]-]{1,128}$/;
+
+/** A file's path, which a local model's id, chosen in a person's settings, may be: never sent. */
+const PATH = /^(?:[/\\]|~(?:[/\\]|$)|\.{1,2}[/\\]|[A-Za-z]:[/\\]|file:)/i;
+
+/** A path ending in a local model's weights, from anywhere: the file's name is the model's, and is sent without its folders. */
+const MODEL_FILE = /[/\\]([^/\\]+\.(?:gguf|ggml|bin|safetensors|llamafile))$/i;
+
+/** A model's id as Claude Code spells it, a model file's own name for its path, or `unknown`. */
+function modelOf(id: string): string {
+  const name = MODEL_FILE.exec(id)?.[1] ?? id;
+  return MODEL.test(name) && !PATH.test(name) ? name : 'unknown';
+}
 
 /** The most the platform keeps of a tag's value: past it, the tag would be dropped whole. */
 const TAG_MAX = 256;
@@ -73,14 +82,14 @@ export interface Context {
   sessionEnded: boolean;
 }
 
-function timeOf(entry: Entry): number | undefined {
+export function timeOf(entry: Entry): number | undefined {
   const time = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN;
   return Number.isFinite(time) ? time : undefined;
 }
 
-/** Claude Code's own error kinds are words like `rate_limit`; anything else is named generically. */
+/** Claude Code's own error kinds are words like `rate_limit`, which alone the reader keeps; anything else is named generically. */
 function errorTypeOf(entry: Entry): string {
-  return typeof entry.error === 'string' && /^[a-z][a-z_]{0,63}$/.test(entry.error) ? entry.error : 'api_error';
+  return entry.error ?? 'api_error';
 }
 
 /** An error Claude Code wrote in the model's place: no call the model answered. */
@@ -93,7 +102,7 @@ function isSynthetic(entry: Entry): boolean {
  * takes input as the conventions count it, the cache's tokens included.
  */
 function usageOf(usage: Usage | undefined): ModelCallRecord['usage'] {
-  if (usage === undefined || usage === null || typeof usage !== 'object') return undefined;
+  if (usage === undefined) return undefined;
   const count = (value: unknown): number =>
     typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.trunc(value) : 0;
   const read = count(usage.cache_read_input_tokens);
@@ -114,11 +123,8 @@ interface Found {
 }
 
 /**
- * The model and tool calls among `entries`, each reply once however many
- * lines Claude Code wrote it in. A subagent's tool call, its transcript found,
- * is a step of the subagent's own calls at the top (`depth` 0), and below it
- * the subagent's calls beside the tool call that started it. None starts
- * before `floor`, the start of the run or the step it is part of.
+ * The model and tool calls among `entries`, each reply once however many lines it took. A subagent's tool call, its
+ * transcript found, is a step holding the subagent's own calls (`depth` 0 is the top); none starts before `floor`.
  */
 function callsIn(
   entries: readonly Entry[],
@@ -141,8 +147,7 @@ function callsIn(
   let previous: number | undefined;
   let reply: { id: string | undefined; call: ModelCallRecord } | undefined;
   for (const entry of entries) {
-    // A subagent's own transcript is sidechain throughout; in the session's,
-    // a sidechain line is an older Claude Code's subagent, written inline.
+    // A subagent's own transcript is sidechain throughout; in the session's, a sidechain line is an older inline subagent.
     if (depth === 0 && entry.isSidechain) continue;
     const time = timeOf(entry);
     if (entry.type === 'assistant' && !isSynthetic(entry) && time !== undefined) {
@@ -150,16 +155,14 @@ function callsIn(
       const id = typeof message.id === 'string' ? message.id : undefined;
       if (reply !== undefined && id !== undefined && id === reply.id) {
         reply.call.end = Math.max(Number(reply.call.end), time);
-        // Each line of a reply repeats its usage, and in a subagent's
-        // transcript the earlier lines hold the counts so far: the last is whole.
+        // Each line of a reply repeats its usage, a subagent's earlier lines only the counts so far: the last is whole.
         const usage = usageOf(message.usage);
         if (usage !== undefined) reply.call.usage = usage;
       } else if (typeof message.model === 'string' && message.model !== '') {
-        // The request went out as the entry before the reply's first line was
-        // written: the prompt, or the last tool's result.
+        // The request went out as the entry before the reply's first line: the prompt, or the last tool's result.
         const call: ModelCallRecord = {
           type: 'model_call',
-          model: MODEL.test(message.model) ? message.model : 'unknown',
+          model: modelOf(message.model),
           provider: context.provider,
           start: Math.min(previous ?? time, time),
           end: time,
@@ -185,8 +188,7 @@ function callsIn(
           subagent === undefined ? undefined : callsIn(subagent.entries, context, depth + 1, until, Math.max(floor, time));
         for (const skill of inner?.skills ?? []) found.skills.add(skill);
         if (subagent !== undefined && inner !== undefined && depth === 0) {
-          // A subagent run in the background answers its tool call at once
-          // and works on: the step ends with the last of its own work.
+          // A background subagent answers its tool call at once and works on: the step ends with the last of its own work.
           const step: StepRecord = {
             type: 'step',
             name: `subagent ${subagent.type ?? 'unknown'}`,
@@ -223,15 +225,12 @@ function callsIn(
       previous = time;
     }
   }
-  // Claude Code writes a prompt's attachments a few milliseconds before the
-  // prompt, and a clock may step back: nothing starts before what holds it,
-  // and nothing ends before it starts, which the SDK would refuse whole.
+  // Clocks step back and attachments precede their prompt: nothing starts before what holds it, or ends before it starts, which the SDK refuses.
   for (const item of found.items) {
     item.start = Math.max(floor, Number(item.start));
     item.end = Math.max(Number(item.start), Number(item.end));
   }
-  // In the order they started, so the record, and the ids derived from each
-  // span's place in it, come out the same however the lines were written.
+  // In the order they started, so the record, and each span's id from its place, are the same however the lines were written.
   const order = new Map(found.items.map((item, index) => [item, index]));
   found.items.sort((a, b) => Number(a.start) - Number(b.start) || order.get(a)! - order.get(b)!);
   return found;

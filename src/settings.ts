@@ -1,8 +1,6 @@
 /**
- * Where the plugin sends, and where it keeps its state: the plugin's own
- * configuration first — `/plugin configure`, which Claude Code hands a hook as
- * `CLAUDE_PLUGIN_OPTION_<NAME>`, the key from the system's keychain — then the
- * SDKs' own variables.
+ * Where the plugin sends and keeps its state: the plugin's own configuration first (`/plugin configure`, handed to a
+ * hook as `CLAUDE_PLUGIN_OPTION_<NAME>`, the key from the system's keychain), then the SDKs' own variables.
  */
 
 import { homedir } from 'node:os';
@@ -31,8 +29,7 @@ function isOn(flag: string | undefined): boolean {
 }
 
 export function settingsFrom(env: NodeJS.ProcessEnv): Settings {
-  // Beside the session transcripts of whichever configuration folder Claude
-  // Code runs with, so two installations keep two states.
+  // Beside the transcripts of whichever configuration folder Claude Code runs with, so two installations keep two states.
   const claude = env['CLAUDE_CONFIG_DIR']?.trim() || join(homedir(), '.claude');
   let provider = 'anthropic';
   if (isOn(env['CLAUDE_CODE_USE_BEDROCK'])) provider = 'aws.bedrock';

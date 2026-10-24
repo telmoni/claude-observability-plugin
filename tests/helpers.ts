@@ -35,15 +35,15 @@ export interface Received {
 }
 
 /**
- * Ingest as the SDK meets it: an OTLP/JSON lane that keeps what it is sent,
- * answers `status`, or takes it in part, naming what it refused in `partial`.
- * A body it took is stored once, as ingest's claim on a body stores a copy
- * sent again.
+ * Ingest as the SDK meets it: an OTLP/JSON lane that keeps what it is sent, answers `status` or takes it in part
+ * (`partial`), and stores a body once.
  */
 export class FakeIngest {
   readonly received: Received[] = [];
   readonly stored = new Set<string>();
   status = 200;
+  /** Statuses to answer first, one a request, before `status`; a refusal given with its problem type is answered with it. */
+  readonly answers: Array<number | { status: number; type: string }> = [];
   partial: string | undefined;
   #server: Server | undefined;
 
@@ -54,15 +54,18 @@ export class FakeIngest {
       request.on('end', () => {
         const body = Buffer.concat(chunks).toString('utf8');
         this.received.push({ url: request.url ?? '', headers: request.headers, body });
-        if (this.status === 200) {
+        const answer = this.answers.shift() ?? this.status;
+        const status = typeof answer === 'number' ? answer : answer.status;
+        if (status === 200) {
           this.stored.add(body);
           const partialSuccess =
             this.partial === undefined ? null : { rejectedSpans: 1, errorMessage: this.partial };
           response.writeHead(200, { 'Content-Type': 'application/json', 'Telmoni-Content-Mode': 'off' });
           response.end(JSON.stringify({ partialSuccess }));
         } else {
-          response.writeHead(this.status, { 'Content-Type': 'application/json' });
-          response.end(JSON.stringify({ code: 7, message: '/errors/authz/forbidden: this API key does not hold the ingest scope' }));
+          response.writeHead(status, { 'Content-Type': 'application/json' });
+          const message = typeof answer === 'number' ? '/errors/authz/forbidden: this API key does not hold the ingest scope' : answer.type;
+          response.end(JSON.stringify({ code: 7, message }));
         }
       });
     });

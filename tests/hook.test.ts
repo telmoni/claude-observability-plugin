@@ -31,16 +31,20 @@ afterEach(async () => {
   home.remove();
 });
 
-function runHook(input: object, env: Record<string, string>): Promise<{ code: number | null; ms: number }> {
+function runHook(input: object, env: Record<string, string>): Promise<{ code: number | null; ms: number; stdout: string; stderr: string }> {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [HOOK], {
-      stdio: ['pipe', 'ignore', 'ignore'],
+      stdio: ['pipe', 'pipe', 'pipe'],
       // Only what Claude Code hands a hook, and a home of the test's own.
       env: { PATH: process.env['PATH'] ?? '', HOME: home.path, ...env },
     });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk: Buffer) => void (stdout += chunk.toString('utf8')));
+    child.stderr.on('data', (chunk: Buffer) => void (stderr += chunk.toString('utf8')));
     child.on('error', reject);
-    child.on('exit', (code) => resolve({ code, ms: Date.now() - started }));
+    child.on('close', (code) => resolve({ code, ms: Date.now() - started, stdout, stderr }));
     child.stdin.end(JSON.stringify(input));
   });
 }
@@ -68,7 +72,7 @@ describe('the hook', () => {
     const transcript = join(claude, 'projects', 'p', `${SESSION}.jsonl`);
     cpSync(fixture('subagent'), transcript, { recursive: true });
     cpSync(join(dirname(fixture('subagent')), 'session'), join(dirname(transcript), SESSION), { recursive: true });
-    const { code, ms } = await runHook(
+    const { code, ms, stdout, stderr } = await runHook(
       {
         session_id: SESSION,
         transcript_path: transcript,
@@ -87,6 +91,7 @@ describe('the hook', () => {
     expect(ingest.received).toEqual([]);
     expect(existsSync(state)).toBe(false);
     expect(code).toBe(0);
+    expect([stdout, stderr]).toEqual(['', '']);
     expect(ms).toBeLessThan(1500);
     expect(await until(() => settled(claude, transcript), 20_000)).toBe(true);
     expect(ingest.received).toHaveLength(3);
@@ -98,9 +103,9 @@ describe('the hook', () => {
     expect(existsSync(join(claude, 'telmoni', 'hook.log'))).toBe(false);
     // What it keeps: places, ids and times, shut to everyone but its owner.
     const kept = join(claude, 'telmoni');
-    expect(statSync(kept).mode & 0o777).toBe(0o700);
+    if (process.platform !== 'win32') expect(statSync(kept).mode & 0o777).toBe(0o700);
     for (const name of readdirSync(kept)) {
-      expect(statSync(join(kept, name)).mode & 0o777).toBe(0o600);
+      if (process.platform !== 'win32') expect(statSync(join(kept, name)).mode & 0o777).toBe(0o600);
       const text = readFileSync(join(kept, name), 'utf8');
       for (const secret of [KEY, home.path, 'projects', '…']) expect(text).not.toContain(secret);
     }
@@ -111,11 +116,12 @@ describe('the hook', () => {
     const claude = join(home.path, '.claude');
     const transcript = join(claude, 'projects', 'p', `${SESSION}.jsonl`);
     cpSync(fixture('interrupted'), transcript, { recursive: true });
-    const { code } = await runHook(
+    const { code, stdout, stderr } = await runHook(
       { session_id: SESSION, transcript_path: transcript, hook_event_name: 'SessionEnd', reason: 'other' },
       { CLAUDE_CONFIG_DIR: claude, CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY: KEY, CLAUDE_PLUGIN_OPTION_TELMONI_ENDPOINT: endpoint },
     );
     expect(code).toBe(0);
+    expect([stdout, stderr]).toEqual(['', '']);
     if (process.platform === 'linux') {
       // Found, in the moment before it reads, by the home this test gave it, which only its environment shows.
       const copies = readdirSync('/proc').flatMap((pid) => {
@@ -173,7 +179,7 @@ describe('the hook', () => {
       });
     });
     expect(code).toBe(0);
-    expect(readFileSync(join(claude, 'telmoni', 'hook.log'), 'utf8')).toMatch(/failed: Error/);
+    expect(readFileSync(join(claude, 'telmoni', 'hook.log'), 'utf8')).toMatch(/failed: NoHookInput\n$/);
   }, 15_000);
 
   it('leaves Cursor’s sessions alone when Cursor runs it, logging nothing', async () => {
@@ -188,8 +194,9 @@ describe('the hook', () => {
 
   it('logs input it does not understand, sends nothing, and still exits 0', async () => {
     const claude = join(home.path, '.claude');
-    const { code } = await runHook({ hook_event_name: 'Stop', session_id: '../../etc' }, { CLAUDE_CONFIG_DIR: claude });
+    const { code, stdout, stderr } = await runHook({ hook_event_name: 'Stop', session_id: '../../etc' }, { CLAUDE_CONFIG_DIR: claude });
     expect(code).toBe(0);
+    expect([stdout, stderr]).toEqual(['', '']);
     expect(readFileSync(join(claude, 'telmoni', 'hook.log'), 'utf8')).toMatch(/hook input not understood/);
     expect(ingest.received).toEqual([]);
   });

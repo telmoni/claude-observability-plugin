@@ -1,7 +1,6 @@
 /**
- * One hook's work on one session: the turns that have ended since the last
- * hook sent, each sent as a run, and the place they end saved after each, so
- * a turn is sent once and none is skipped.
+ * One hook's work on one session: the turns ended since the last hook sent, each sent as a run and the place after it
+ * saved, so a turn is sent once and none is skipped.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
@@ -10,7 +9,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import type { RunRecord } from 'telmoni';
 
-import { type Context, type Subagent, recordOf, subagentsIn } from './record.js';
+import { type Context, type Subagent, recordOf, subagentsIn, timeOf } from './record.js';
 import type { Destination } from './send.js';
 import type { Settings } from './settings.js';
 import { type SessionState, readState, withLock, writeState } from './state.js';
@@ -24,6 +23,7 @@ import {
   hasWork,
   isInterruption,
   isMarked,
+  isToolResult,
   markOf,
   readWindow,
   segments,
@@ -76,11 +76,7 @@ const AGENT_TYPE = /^[\w.:-]{1,64}$/;
  */
 const SUBAGENT_IDLE_MS = 30 * 60_000;
 
-/**
- * The subagents' transcripts beside the session's, found by the tool call
- * that started each — its `.meta.json` names it — and read once, when first
- * asked for.
- */
+/** The subagents' transcripts beside the session's, found by the tool call that started each (its `.meta.json` names it), read once. */
 export function subagentsOf(transcriptPath: string): (toolUseId: string) => Subagent | undefined {
   const dir = join(dirname(transcriptPath), basename(transcriptPath, '.jsonl'), 'subagents');
   let index: Map<string, { path: string; type: string | undefined }> | undefined;
@@ -136,24 +132,39 @@ function firstRun(entries: Entry[]): { entries: Entry[]; ended: boolean } {
     let end = index + 1;
     const id = entry.message?.id;
     while (id !== undefined && entries[end]?.type === 'assistant' && entries[end]?.message?.id === id) end++;
+    if (entry.type === 'assistant' && goesOn(entries, end, entry)) continue;
     return { entries: entries.slice(0, end), ended: true };
   }
   return { entries, ended: false };
 }
 
+/** The stop reasons Claude Code goes on past, in the same run, once it has written its word to go on. */
+const CUT_OFF = new Set(['max_tokens', 'refusal', 'model_context_window_exceeded']);
+
 /**
- * Whether a subagent the segment started is still at work: in the
- * background, it writes on after the turn that started it has ended. One
- * that has written nothing for `SUBAGENT_IDLE_MS` is taken to have stopped.
+ * Whether the run goes on past `reply`: Claude Code's word to go on follows it, past its tools' results, or, the reply
+ * cut off and no error, may still come. A word the main agent sends a subagent is none: it never carries the mark.
+ */
+function goesOn(entries: Entry[], from: number, reply: Entry): boolean {
+  for (const next of entries.slice(from)) {
+    if (next.turnCompanion === true) return true;
+    if (isToolResult(next) || (next.type !== 'user' && next.type !== 'assistant')) continue;
+    return false;
+  }
+  return reply.isApiErrorMessage !== true && CUT_OFF.has(reply.message?.stop_reason ?? '');
+}
+
+/**
+ * Whether a subagent the segment started is still at work: in the background it writes on after its turn ended, and
+ * one quiet for `SUBAGENT_IDLE_MS` is taken to have stopped.
  */
 function waitsOnSubagent(segment: Segment, context: Context): boolean {
   return subagentsIn(segment, context).some((subagent) => !subagent.ended && Date.now() - subagent.touched < SUBAGENT_IDLE_MS);
 }
 
 /**
- * Each line once: a line Claude Code wrote again carries the id it had. The
- * line kept before a dropped one takes its end, so what is saved as read
- * still reaches past it.
+ * Each line once: a line Claude Code wrote again carries the id it had. The line kept before a dropped one takes its
+ * end, so what is saved as read still reaches past it.
  */
 function once(lines: Line[]): Line[] {
   const seen = new Set<string>();
@@ -172,10 +183,7 @@ function once(lines: Line[]): Line[] {
 }
 
 function timesOf(segment: Segment): number[] {
-  return segment.entries.flatMap((entry) => {
-    const time = typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN;
-    return Number.isFinite(time) ? [time] : [];
-  });
+  return segment.entries.flatMap((entry) => timeOf(entry) ?? []);
 }
 
 /**
@@ -190,10 +198,8 @@ function stillAt(path: string, state: SessionState): boolean {
 }
 
 /**
- * The transcript from where the session's state left it, or from the top
- * where the file has shrunk or been rewritten under that place. A turn
- * longer than the window is read whole, the window doubled until it holds
- * the next turn's opening, up to `MOST_WINDOWS` windows.
+ * The transcript from where the session's state left it, or from the top where the file shrank or was rewritten under
+ * that place. A turn longer than the window is read whole, the window doubled up to `MOST_WINDOWS` times.
  */
 function readFrom(
   path: string,
@@ -230,14 +236,17 @@ function logOnce(dir: string, sessionId: string, flag: 'warnedNoKey' | 'warnedEn
 
 export async function sync(input: HookInput, settings: Settings, deps: Deps): Promise<void> {
   const { apiKey } = settings;
-  if (apiKey === undefined) {
-    const line = 'no key: set it with /plugin configure, or TELMONI_API_KEY; nothing is sent until then';
-    logOnce(settings.dir, input.sessionId, 'warnedNoKey', line, deps.log);
-    return;
-  }
+  // Said once already: a hook with no key has nothing to wait for the lock for.
+  if (apiKey === undefined && readState(settings.dir, input.sessionId).warnedNoKey === true) return;
   // Nothing follows the session's end: its copy outwaits any live holder, whose sending no fixed wait bounds.
   const waitMs = input.event === 'SessionEnd' ? Number.POSITIVE_INFINITY : (deps.lockWaitMs ?? LOCK_WAIT_MS);
+  // Under the lock, so no line logged once is written over a hook's save.
   const locked = await withLock(settings.dir, input.sessionId, waitMs, async () => {
+    if (apiKey === undefined) {
+      const line = 'no key: set it with /plugin configure, or TELMONI_API_KEY; nothing is sent until then';
+      logOnce(settings.dir, input.sessionId, 'warnedNoKey', line, deps.log);
+      return;
+    }
     let sender: ReturnType<Deps['sender']>;
     try {
       sender = deps.sender({ endpoint: settings.endpoint, apiKey });
@@ -259,9 +268,8 @@ export async function sync(input: HookInput, settings: Settings, deps: Deps): Pr
 }
 
 /**
- * One window of the transcript, its ended turns sent in order as far as they
- * can be, and the place after each saved; whether there is more to read past
- * where it saved.
+ * One window of the transcript, its ended turns sent in order as far as they can be and the place after each saved;
+ * whether there is more to read past where it saved.
  */
 async function pass(input: HookInput, settings: Settings, deps: Deps, sender: ReturnType<Deps['sender']>): Promise<boolean> {
   const state = readState(settings.dir, input.sessionId);
@@ -281,12 +289,7 @@ async function pass(input: HookInput, settings: Settings, deps: Deps, sender: Re
     all = segments(read.lines, marked);
   }
   const { offset, more } = read;
-  // Where the file runs on past the window, the window's last segment may
-  // be cut midway, and waits for the next hook — unless it is all the
-  // window holds, a turn longer than the most a hook reads, sent in parts.
-  // Otherwise the last segment is the turn still going, unless the turn
-  // just stopped or the session is over; the ones before it have each been
-  // followed by another turn's opening.
+  // Past the window the last segment waits, unless it fills the window; within it, the last is still going unless it stopped or the session ended.
   const ending = input.event === 'SessionEnd' && !more;
   const last = (segment: Segment): boolean =>
     more ? all.length === 1 : ending || (stopping && hasEnded(segment));
@@ -324,7 +327,6 @@ async function pass(input: HookInput, settings: Settings, deps: Deps, sender: Re
         (segment.opener === undefined && through !== undefined && (times[0] ?? 0) <= through));
     if (record !== undefined && !old) {
       if (!(await sender.send(record))) return false;
-      sent.delete(record.runId);
       sent.add(record.runId);
     }
     if (record !== undefined) for (const time of times) through = Math.max(through ?? time, time);

@@ -1,15 +1,6 @@
 /**
- * A Claude Code transcript, read as far as the turns' metadata goes.
- *
- * A transcript is JSON Lines, one entry per line, appended as the session
- * goes. A turn opens at the entry that carries `turnPosition` — a prompt, a
- * scheduled prompt or a background task's notice — and runs to the next one.
- * Of each entry the plugin reads its kind, id, time and flags; of a reply its
- * id, model, stop reason and token counts; of a tool call its id and name, and
- * of the Skill tool the skill's name alone; of a tool's result whether it was
- * an error. A prompt's text is looked at only to tell an interruption from a
- * prompt, and nothing of it is kept: each line is cut down to those as it is
- * parsed, before it is held.
+ * A Claude Code transcript — JSON Lines, a turn opening at each entry with `turnPosition` — read as far as the turns'
+ * metadata goes: each line is cut down to its kinds, ids, times, counts and flags as it is parsed, before it is held.
  */
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
@@ -39,7 +30,10 @@ export interface Entry {
   isCompactSummary?: boolean;
   isSidechain?: boolean;
   isApiErrorMessage?: boolean;
-  error?: unknown;
+  /** Claude Code's own hidden word to go on, after a reply cut off or answered with nothing: the run goes on. */
+  turnCompanion?: boolean;
+  /** Claude Code's own kind for the error, a word like `rate_limit`: nothing else is kept. */
+  error?: string;
   turnPosition?: unknown;
   message?: {
     id?: string;
@@ -56,11 +50,7 @@ export interface Line {
   end: number;
 }
 
-/**
- * The most of a transcript read at once: a long session's transcript runs to
- * hundreds of megabytes, and a plugin installed midway catches up a window a
- * hook.
- */
+/** The most of a transcript read at once: a long session's runs to hundreds of megabytes, caught up a window a hook. */
 export const MAX_READ = 16 * 1024 * 1024;
 
 /** How much of a window is held as bytes at once, the rest read as it is parsed. */
@@ -76,7 +66,7 @@ const ERROR_KIND = /^[a-z][a-z_]{0,63}$/;
 export interface Window {
   lines: Line[];
   more: boolean;
-  /** Where to read on from, past a line too long to read, when the window held nothing else. */
+  /** Where to read on from, when the window held no line to read: past one too long for it, or past lines none could read. */
   skipTo?: number | undefined;
 }
 
@@ -86,10 +76,8 @@ export function readLines(path: string, offset: number): Line[] {
 }
 
 /**
- * The whole lines from `offset` on, at most `max` bytes of them, each cut
- * down to what the plugin reads. A last line with no newline yet is still
- * being written and is left for the next read; a line that is not JSON is
- * passed over.
+ * The whole lines from `offset` on, at most `max` bytes of them, each cut down to what the plugin reads. A last line
+ * with no newline yet is still being written and is left for the next read; a line that is not JSON is passed over.
  */
 export function readWindow(path: string, offset: number, max = MAX_READ): Window {
   const size = statSync(path).size;
@@ -125,10 +113,11 @@ export function readWindow(path: string, offset: number, max = MAX_READ): Window
   }
   const more = limit < size;
   if (begun === offset && more) {
-    // One line longer than a window — a pasted image, say — is passed over
-    // as an unreadable one is, rather than read for ever.
+    // One line longer than a window — a pasted image, say — is passed over as an unreadable one is, rather than read for ever.
     return { lines, more, skipTo: endOfLine(path, limit, size, max) };
   }
+  // Lines ended, none of them readable: past them, or a line too long for the window after them would hold the session there.
+  if (lines.length === 0 && begun > offset) return { lines, more, skipTo: begun };
   return { lines, more };
 }
 
@@ -137,11 +126,17 @@ function parsed(bytes: Buffer): Entry | undefined {
   if (text === '') return undefined;
   try {
     const value = JSON.parse(text) as unknown;
-    return isObject(value) ? slim(value) : undefined;
+    return isObject(value) && !isPlaceholder(value) ? slim(value) : undefined;
   } catch {
     // A line torn by a crash, or not Claude Code's: nothing in it is read.
     return undefined;
   }
+}
+
+/** The reply Claude Code writes as it resumes a session whose last line was no reply, `No response requested.`: no model's, and no error. */
+function isPlaceholder(raw: Record<string, unknown>): boolean {
+  const message = raw['message'];
+  return raw['type'] === 'assistant' && isObject(message) && message['model'] === '<synthetic>' && raw['isApiErrorMessage'] !== true && raw['error'] === undefined;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -149,10 +144,8 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Of an entry, what the plugin reads and nothing else: a prompt, a reply, a
- * thought, a tool's input or output, a path, are gone before the entry is
- * held, so a turn hundreds of megabytes long is held in a few, and nothing
- * said in a session is in memory longer than it takes to parse its line.
+ * Of an entry, what the plugin reads and nothing else: a prompt, a reply, a thought, a tool's input or output, a path
+ * are gone before the entry is held, so nothing said in a session stays in memory longer than its line takes to parse.
  */
 function slim(raw: Record<string, unknown>): Entry {
   const entry: Entry = {};
@@ -163,6 +156,7 @@ function slim(raw: Record<string, unknown>): Entry {
   if (raw['isCompactSummary'] === true) entry.isCompactSummary = true;
   if (raw['isSidechain'] === true) entry.isSidechain = true;
   if (raw['isApiErrorMessage'] === true) entry.isApiErrorMessage = true;
+  if (raw['turnCompanion'] === true) entry.turnCompanion = true;
   if (typeof raw['error'] === 'string' && ERROR_KIND.test(raw['error'])) entry.error = raw['error'];
   if (raw['turnPosition'] !== undefined && raw['turnPosition'] !== null) entry.turnPosition = true;
   const message = raw['message'];
@@ -222,10 +216,8 @@ const MARK_MOST = 1024 * 1024;
 const PLAIN = /^[\w-]{1,64}$/;
 
 /**
- * What the line ending at `end` is known by — its id, its kind where it has
- * none, or only that a line ends there where it cannot be read back — and
- * undefined where no line ends there. The state keeps it beside the place it
- * saves, so a transcript rewritten under that place is known for one.
+ * What the line ending at `end` is known by — its id, its kind, or only that a line ends there — and undefined where
+ * none does. Saved beside the place, it tells a transcript rewritten under that place from one appended to.
  */
 export function markOf(path: string, end: number): string | undefined {
   if (end <= 0) return undefined;
@@ -301,10 +293,8 @@ export function isInterruption(entry: Entry): boolean {
 }
 
 /**
- * Whether `entry` opens a turn. Claude Code marks each with `turnPosition`;
- * a transcript written before it did is read by its prompts: a person's own
- * text or image, never a command's output, a notice, an interruption or a
- * summary.
+ * Whether `entry` opens a turn. Claude Code marks each with `turnPosition`; a transcript from before it did is read by
+ * its prompts: a person's own text or image, never a command's output, a notice, an interruption or a summary.
  */
 export function opensTurn(entry: Entry, marked: boolean): boolean {
   if (entry.type !== 'user' || entry.isMeta || entry.isCompactSummary || entry.isSidechain) return false;

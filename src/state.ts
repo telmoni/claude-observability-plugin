@@ -1,7 +1,6 @@
 /**
- * What has been sent of each session, `<session_id>.json` in the plugin's
- * folder, and the lock that keeps two hooks of one session from sending the
- * same turns at once.
+ * What has been sent of each session, `<session_id>.json` in the plugin's folder, and the lock that keeps two hooks of
+ * one session from sending the same turns at once.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -24,17 +23,16 @@ export interface SessionState {
   /** Where in the transcript the first turn not yet sent begins, in bytes. */
   offset: number;
   /**
-   * What the line before `offset` was known by when it was saved (`markOf`):
-   * a transcript rewritten under the place reads otherwise there, and is read
-   * from the top.
+   * What the line before `offset` was known by when saved (`markOf`): a transcript rewritten under the place reads
+   * otherwise there, and is read from the top.
    */
   mark?: string;
   /**
-   * The runs sent, newest last, and when the last of them ended: Claude Code
-   * can write a session's old lines into its transcript again, and shrink it,
+   * The runs sent, newest last: Claude Code can write a session's old lines into its transcript again, and shrink it,
    * and a turn read a second time is known by these rather than sent twice.
    */
   sent?: string[];
+  /** When the last line sent was written, in ms since the epoch: a continuation no later than it is old. */
   through?: number;
   /**
    * Whether the transcript marks its turns' openings, as every Claude Code
@@ -82,23 +80,24 @@ export function writeState(dir: string, sessionId: string, state: SessionState):
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${sessionId}.json`);
   // Synced aside, then renamed over: a hook killed, or a machine stopped, mid-write leaves the last state whole.
-  const fd = openSync(`${path}.tmp`, 'w', 0o600);
+  // Its own, so a copy that took a stale lock in the same instant as another never writes into this one's.
+  const temporary = `${path}.${process.pid}.tmp`;
+  const fd = openSync(temporary, 'w', 0o600);
   try {
     writeFileSync(fd, JSON.stringify(state));
     fsyncSync(fd);
   } finally {
     closeSync(fd);
   }
-  renameSync(`${path}.tmp`, path);
+  renameSync(temporary, path);
 }
 
 /** A lock untouched for this long was left by a hook that died holding it. */
 const STALE_MS = 120_000;
 
 /**
- * Holds the session's lock while `work` runs, waiting up to `waitMs` for a
- * hook already holding it; false, and `work` not run, if it never comes free.
- * `staleMs` is the tests' way to shorten how long an untouched lock stands.
+ * Holds the session's lock while `work` runs, waiting up to `waitMs` for a hook already holding it; false, and `work`
+ * not run, if it never comes free. `staleMs` is the tests' seam for how long an untouched lock stands.
  */
 export async function withLock(
   dir: string,
@@ -109,8 +108,7 @@ export async function withLock(
 ): Promise<boolean> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const path = join(dir, `${sessionId}.lock`);
-  // Written into the lock, so a hook lets go of its own lock and never of one
-  // another hook took from it, found stale after a sleep of the machine.
+  // Written into the lock, so a hook lets go of its own and never of one another hook took from it after a sleep of the machine.
   const token = `${process.pid}:${randomUUID()}`;
   const deadline = Date.now() + waitMs;
   for (;;) {
@@ -128,8 +126,7 @@ export async function withLock(
       await sleep(200);
     }
   }
-  // Touched while held: a hook still sending to a slow Telmoni is never taken
-  // for one that died, however long its sending takes.
+  // Touched while held: a hook still sending to a slow Telmoni is never taken for one that died, however long it takes.
   const touch = setInterval(() => {
     try {
       const now = new Date();

@@ -7,11 +7,7 @@ import { isSessionId } from './state.js';
 
 const EVENTS = new Set<HookEvent>(['Stop', 'StopFailure', 'SessionEnd']);
 
-/**
- * Cursor runs Claude Code's hooks too, a plugin's among them, handing them
- * its own events: Telmoni's Cursor plugin records those sessions, so this
- * one leaves them alone.
- */
+/** Cursor runs Claude Code's hooks too, with its own events, which Telmoni's Cursor plugin records: this one stands aside. */
 export function isCursor(raw: unknown, env: NodeJS.ProcessEnv): boolean {
   const fields = raw !== null && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return typeof fields['cursor_version'] === 'string' || Boolean(env['CURSOR_VERSION']);

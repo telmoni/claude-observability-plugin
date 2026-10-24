@@ -1,7 +1,6 @@
 /**
- * The hook's log, `hook.log` in the plugin's folder: a line per thing that
- * went wrong, naming its kind and never anything from the session — no text,
- * no path, no key — since the hook runs where nobody sees its output.
+ * The hook's log, `hook.log` in the plugin's folder: a line per thing that went wrong, naming its kind and never
+ * anything from the session — no text, no path, no key — since the hook runs where nobody sees its output.
  */
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
