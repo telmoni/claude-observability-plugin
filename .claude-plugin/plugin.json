@@ -1,7 +1,7 @@
 {
   "name": "telmoni-observability",
   "displayName": "Telmoni Observability",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Records each turn of your Claude Code sessions in Telmoni as a run: the models, their tokens, the tools and the times. Never a prompt, a reply, a thought, a tool's input or output, or a path.",
   "author": {
     "name": "Telmoni",
