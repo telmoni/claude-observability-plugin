@@ -63,3 +63,9 @@ def test_cursor_records_its_own_conversations():
 def test_a_payload_survives_the_trip_to_the_worker():
     got = hook_payload.parse(stop(hook_event_name="StopFailure", error="overloaded"), {})
     assert hook_payload.Payload.from_dict(json.loads(json.dumps(got.as_dict()))) == got
+
+
+def test_an_error_kind_is_short_and_never_a_message():
+    long = hook_payload.parse(stop(hook_event_name="StopFailure", error="x" * 65), {})
+    spaced = hook_payload.parse(stop(hook_event_name="StopFailure", error="API Error: 429"), {})
+    assert (long.error, spaced.error) == ("unknown", "unknown")

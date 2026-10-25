@@ -60,7 +60,8 @@ def parse(raw: str, env: Mapping[str, str]) -> Payload | None:
     error = None
     if event == "StopFailure":
         kind = data.get("error")
-        error = kind if isinstance(kind, str) and kind else "unknown"
+        is_kind = isinstance(kind, str) and 0 < len(kind) <= 64 and " " not in kind
+        error = kind if is_kind else "unknown"
     tasks = data.get("background_tasks")
     busy = isinstance(tasks, list) and any(
         isinstance(task, dict) and task.get("type") in BUSY_KINDS for task in tasks
