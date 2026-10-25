@@ -1,9 +1,9 @@
 # Claude Code Plugin — Agent Guidelines
 
-The Claude Code plugin for Telmoni ([`telmoni/claude-observability-plugin`](https://github.com/telmoni/claude-observability-plugin)): a hook that records each turn of a person's Claude Code sessions as a run, metadata only, through the Python SDK of the platform ([`telmoni/telmoni`](https://github.com/telmoni/telmoni), `sdk/python`, on PyPI as `telmoni`). The repository is the plugin and its own marketplace: Claude Code clones it and runs the hook from the clone, so every file here is published as written.
+The Claude Code plugin for Telmoni: a hook that records each turn of a person's Claude Code sessions as a run, metadata only, through the platform's Python SDK. The repository is the plugin and its own marketplace: Claude Code clones it and runs the hook from the clone, so every file here is published as written.
 
 ## Ground Rules
-- **Metadata only.** The hook reads of a transcript its kinds, ids, times, counts and flags, and the first characters of a user row for Claude Code's markers alone. Never keep, log or send a prompt, a reply, thinking, a tool's input or output beyond a skill's name, a command, a path, the working folder, a title or an email. A change that reads more of the transcript needs the owner's word, and a test that it is never sent.
+- **Metadata only.** The hook reads of a transcript its kinds, ids, times, counts and flags, the first characters of a user row for Claude Code's markers, and the tool-use id a task's notice names. Never keep, log or send a prompt, a reply, thinking, a path, the working folder, or a tool's input or output beyond a skill's name and a subagent's kind. A change that reads more of the transcript needs the owner's word, and a test that it is never sent (`assert_metadata_only` in `tests/conftest.py`).
 - **Never read, print or copy a `.env`, Claude Code's credentials (`~/.claude/.credentials.json`) or a key.** A test, a fixture or a commit never holds a real key.
 - **Ask first:** any dependency change (the script's header, `pyproject.toml`, `uv.lock`) and any external-state change (a listing in a directory, a call to a live Telmoni with a real key).
 - **Quality gate:** never weaken a test or leave the tree broken.
@@ -18,6 +18,8 @@ The Claude Code plugin for Telmoni ([`telmoni/claude-observability-plugin`](http
 | `hooks/telmoni_hook.py` | The script Claude Code runs, with the SDK in its header; it starts the worker and returns. |
 | `hooks/telmoni_claude/` | The package: `payload` (the hook's input), `settings`, `transcript` (rows and what is read of them), `turns` (how turns are cut and when they are complete), `record` (a turn as a run), `send` (the SDK, and what its warnings mean), `state` (the session's file and lock), `worker`, `log`. |
 | `tests/` | pytest: `conftest.py` writes transcripts as Claude Code does and stands in for Telmoni; `test_worker.py` runs the hook end to end, the SDK included. |
+| `pyproject.toml`, `uv.lock` | The development tools alone (ruff, pytest), locked; the hook's one dependency is the script's header. |
+| `.github/workflows/` | `ci.yml`: the suite on Python 3.10 and 3.14, ruff, a smoke run of the hook, the manifests. `release.yml`: on `main`, tags a version bump and cuts the release once the owner approves the `release` environment. |
 | `ARCHITECTURE.md` | How it runs, what it reads, how turns are cut, what it sends, delivery, state, what ships, decisions. |
 | [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK (`sdk/python`, `record_run`). |
 | [`telmoni/docs`](https://github.com/telmoni/docs) | Sibling repo, checked out as `../docs`: the book; `content/api/coding-agents.mdx` is this plugin's page. |

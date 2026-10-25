@@ -16,7 +16,7 @@
     "TELMONI_API_KEY": {
       "type": "string",
       "title": "Telmoni API key",
-      "description": "A project API key with the ingest scope (telmoni_…), from the project's API keys page.",
+      "description": "A project API key with the ingest scope (tm_…), from the project's API keys page.",
       "sensitive": true
     },
     "TELMONI_ENDPOINT": {
