@@ -21,6 +21,7 @@ from telmoni_claude.send import flush_seconds, judge
         ("telmoni: the export queue was full; 3 spans were dropped", "undelivered"),
         ("telmoni: the server dropped gen_ai.usage.input_tokens (not a count)", "partial"),
         ("telmoni: a span past the 1 MiB an export may hold was dropped", "partial"),
+        ("telmoni: the server said: something it did not keep", "partial"),
     ],
 )
 def test_what_the_sdks_warnings_mean(warning, outcome):

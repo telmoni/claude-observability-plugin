@@ -20,7 +20,7 @@ BATCH = 512
 BATCH_WORST_S = 150
 FLUSH_SLACK_S = 30
 UNDELIVERED = ("export failed after", "an export failed (", "the export queue was full")
-PARTIAL = ("the server dropped", "the server refused a span", "past the 1 MiB")
+PARTIAL = ("the server dropped", "the server refused a span", "past the 1 MiB", "the server said")
 # Refused for what the run holds, for the organization's standing, or for a fault of
 # Telmoni's own that a second try would meet again.
 FINAL_STATUSES = (400, 402, 413, 500)
@@ -126,8 +126,9 @@ class Sender:
             except (TypeError, ValueError) as fault:
                 return Verdict("refused", f"the SDK refused the run: {fault}")
             flushed = client.flush(timeout_s=flush_seconds(spans(record)))
-            client.shutdown()
         finally:
+            # Whatever happened, the exporter's thread ends with the client, so the worker can exit.
+            client.shutdown()
             logger.removeHandler(heard)
         return judge(heard.lines, flushed)
 
