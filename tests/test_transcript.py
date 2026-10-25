@@ -124,3 +124,10 @@ def test_subagents_are_found_by_the_tool_call_that_started_them(transcript):
     assert (found["tu1"].agent_type, found["tu1"].finished) == ("Explore", True)
     assert found["tu2"].finished is None
     assert t.discover_subagents(Transcript(transcript.path.parent / "x.jsonl", "x").path) == {}
+
+
+def test_an_image_alone_is_a_prompt(transcript):
+    transcript.image_prompt()
+    transcript.image_prompt(with_origin=False)
+    transcript.image_prompt(with_origin=False, caption=True)
+    assert [t.is_prompt(row) for row in rows(transcript)] == [True, True, True]

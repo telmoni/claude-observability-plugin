@@ -49,6 +49,8 @@ class Turn:
     next_offset: int = 0
     _models: dict[str, ModelCall] = field(default_factory=dict, repr=False)
     _tools: dict[str, ToolCall] = field(default_factory=dict, repr=False)
+    # The calls the last result row answered: a refusal's marker right after names them.
+    _answered: list[ToolCall] = field(default_factory=list, repr=False)
 
     def feed(self, row: Row, last: datetime) -> datetime:
         """Take one row of the turn; gives the time the next row follows from."""
@@ -61,14 +63,14 @@ class Turn:
             if results:
                 self._results(row, results, when)
                 return when
-            if t.interruption(row):
+            kind = t.interruption(row)
+            if kind:
+                if kind == "tool":
+                    for tool in self._answered:
+                        tool.cancelled, tool.error_type = True, None
                 self.ended_by_interruption = True
                 self._later(when)
                 return when
-            notice = t.notification_tool_use_id(row)
-            if notice and notice in self._tools:
-                self._tools[notice].notified = True
-                self._tools[notice].replied = False
         return last
 
     def _reply(self, row: Row, last: datetime, when: datetime) -> None:
@@ -95,14 +97,13 @@ class Turn:
             )
             self._tools[use.tool_use_id] = tool
             self.tool_calls.append(tool)
-        for tool in self.tool_calls:
-            if tool.notified:
-                tool.replied = True
+        self._answered = []
         self.ended_by_interruption = False
         self._later(when)
 
     def _results(self, row: Row, results: list[t.ToolResult], when: datetime) -> None:
         agent = t.async_agent(row)
+        answered = []
         for result in results:
             tool = self._tools.get(result.tool_use_id)
             if tool is None:
@@ -112,6 +113,8 @@ class Turn:
             tool.error_type = "ToolError" if result.is_error and not result.interrupted else None
             if agent is not None:
                 tool.background = True
+            answered.append(tool)
+        self._answered = answered
         self._later(when)
 
     def _later(self, when: datetime) -> None:
@@ -125,6 +128,8 @@ def assemble(rows: list[Row], session_id: str, end: int) -> list[Turn]:
     turns: list[Turn] = []
     current: Turn | None = None
     last = datetime.now(timezone.utc)
+    # Every tool call so far: a background task's notice can land in a later turn than its call.
+    tools: dict[str, ToolCall] = {}
     for row in rows:
         if row.session_id and row.session_id != session_id:
             continue
@@ -139,10 +144,26 @@ def assemble(rows: list[Row], session_id: str, end: int) -> list[Turn]:
             continue
         if current is not None:
             last = current.feed(row, last)
+            tools.update(current._tools)
+        _notice(row, tools)
     if current is not None:
         current.next_offset = end
         turns.append(current)
     return turns
+
+
+def _notice(row: Row, tools: dict[str, ToolCall]) -> None:
+    """A task's notice marks the background call it answers; the reply after it, in whatever
+    turn, says the session went on."""
+    if row.type == "assistant":
+        for tool in tools.values():
+            if tool.notified:
+                tool.replied = True
+        return
+    named = t.notification_tool_use_id(row)
+    if named and named in tools:
+        tools[named].notified = True
+        tools[named].replied = False
 
 
 def collect(rows: list[Row]) -> tuple[list[ModelCall], list[ToolCall], datetime | None]:

@@ -138,3 +138,32 @@ def test_a_subagents_transcript_is_one_span_of_work(transcript):
     models, tools, ended = turns.collect(t.read_rows(sub.path, 0).rows)
     assert len(models) == 2 and len(tools) == 1
     assert ended == sub.clock
+
+
+def test_a_notice_landing_in_a_later_turn_marks_its_tool_call(transcript):
+    transcript.prompt()
+    transcript.reply(
+        tool_uses=(("tu1", "Agent", {"subagent_type": "Explore", "run_in_background": True}),)
+    )
+    transcript.result("tu1", async_agent="abc")
+    transcript.prompt()
+    transcript.reply(message_id="msg_2")
+    first, second = build(transcript)[0]
+    assert not turns.is_complete(first, "Stop", False, {})
+    transcript.notice("tu1")
+    first, second = build(transcript)[0]
+    assert not turns.is_complete(first, "Stop", False, {})
+    transcript.reply(message_id="msg_3")
+    first, second = build(transcript)[0]
+    assert turns.is_complete(first, "Stop", False, {})
+    assert turns.is_complete(second, "Stop", False, {})
+
+
+def test_a_refused_tool_is_cancelled_and_the_turn_with_it(transcript):
+    transcript.prompt()
+    transcript.reply(tool_uses=(("tu1", "Bash", {}),))
+    transcript.denied("tu1")
+    (turn,), _ = build(transcript)
+    (tool,) = turn.tool_calls
+    assert (tool.cancelled, tool.error_type) == (True, None)
+    assert turn.ended_by_interruption

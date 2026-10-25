@@ -23,9 +23,9 @@ SECRETS = (
     "SUBAGENT-PROMPT-NEVER-SENT",
     "SUBAGENT-DESCRIPTION-NEVER-SENT",
     "COPIED-HISTORY-NEVER-SENT",
-    "telmoni_test_key_never_sent",
+    "tm_test_key_never_sent",
 )
-KEY = "telmoni_test_key_never_sent"
+KEY = "tm_test_key_never_sent"
 ENDPOINT = "http://localhost:1"
 
 
@@ -134,6 +134,34 @@ class Transcript:
         self.tick()
         return self.row("user", {"role": "user", "content": text})
 
+    def image_prompt(self, with_origin: bool = True, caption: bool = False) -> dict[str, Any]:
+        """A prompt that is an image: Claude Code writes an empty text block first, and
+        marks the row as the person's by its origin."""
+        self.tick()
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": ""},
+            {"type": "image", "source": {"type": "base64", "data": "PROMPT-TEXT-NEVER-SENT"}},
+        ]
+        if caption:
+            content.append({"type": "text", "text": "PROMPT-TEXT-NEVER-SENT"})
+        extra = {"origin": {"kind": "human"}} if with_origin else {}
+        return self.row("user", {"role": "user", "content": content}, **extra)
+
+    def denied(self, tool_use_id: str) -> dict[str, Any]:
+        """A tool call the person refused, as Claude Code writes it: an error result whose
+        reason is text, then the marker."""
+        block = {
+            "type": "tool_result",
+            "tool_use_id": tool_use_id,
+            "content": "TOOL-OUTPUT-NEVER-SENT",
+            "is_error": True,
+        }
+        self.tick()
+        self.row(
+            "user", {"role": "user", "content": [block]}, toolUseResult="TOOL-OUTPUT-NEVER-SENT"
+        )
+        return self.interrupt(tool=True)
+
     def notice(self, tool_use_id: str) -> dict[str, Any]:
         text = (
             "<task-notification>\n"
@@ -212,11 +240,14 @@ class Server:
         self.bodies.append(text)
         self.exports.append(json.loads(text))
         answer = self.answers.pop(0) if self.answers else 200
-        status, problem = answer if isinstance(answer, tuple) else (answer, "/errors/test")
-        # A refusal is problem details; the SDK reads the type off the message.
-        reply = b"{}" if status < 300 else json.dumps({"message": f"{problem}: refused"}).encode()
+        status, text = answer if isinstance(answer, tuple) else (answer, None)
         if status < 300:
+            # A success may carry a partial success, which the SDK reads line by line.
+            reply = (text or "{}").encode()
             self.accepted.append(self.exports[-1])
+        else:
+            # A refusal is problem details; the SDK reads the type off the message.
+            reply = json.dumps({"message": f"{text or '/errors/test'}: refused"}).encode()
         return Answer(status=status, headers={}, body=reply)
 
     def spans(self) -> list[dict[str, Any]]:

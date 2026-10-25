@@ -111,11 +111,29 @@ def _text(row: Row) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
+        # The first text block that says anything: an image comes behind an empty one.
         for block in content:
             if isinstance(block, dict) and block.get("type") == "text":
                 text = block.get("text")
-                return text if isinstance(text, str) else ""
+                if isinstance(text, str) and text.strip():
+                    return text
     return ""
+
+
+def _block_types(row: Row) -> set[str]:
+    message = row.message
+    content = message.get("content") if message else None
+    if not isinstance(content, list):
+        return set()
+    kinds = (block.get("type") for block in content if isinstance(block, dict))
+    return {kind for kind in kinds if isinstance(kind, str)}
+
+
+def origin_kind(row: Row) -> str | None:
+    """Where Claude Code says a user row came from: the person, a task's notice, a peer."""
+    origin = row.data.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    return kind if isinstance(kind, str) else None
 
 
 def head(row: Row) -> str:
@@ -148,7 +166,8 @@ def tool_results(row: Row) -> list[ToolResult]:
 
 def is_prompt(row: Row) -> bool:
     """A prompt the person gave: not Claude Code's own rows, its injected context, a
-    compaction's summary, a tool's result, a task's notice or an interruption."""
+    compaction's summary, a tool's result, a task's notice or an interruption. An image
+    alone is one, known by the row's origin or by the image."""
     if row.type != "user" or row.role != "user":
         return False
     data = row.data
@@ -157,9 +176,9 @@ def is_prompt(row: Row) -> bool:
     if tool_results(row):
         return False
     first = head(row)
-    if not first or first.startswith(INTERRUPTED) or first.startswith(NOTIFICATION):
+    if first.startswith((INTERRUPTED, NOTIFICATION, *NOT_A_PROMPT)):
         return False
-    return not first.startswith(NOT_A_PROMPT)
+    return bool(first) or origin_kind(row) == "human" or "image" in _block_types(row)
 
 
 def interruption(row: Row) -> str | None:
@@ -178,9 +197,7 @@ def notification_tool_use_id(row: Row) -> str | None:
     """The tool call a background task's notice answers, read off its tags."""
     if row.type != "user":
         return None
-    origin = row.data.get("origin")
-    by_origin = isinstance(origin, dict) and origin.get("kind") == "task-notification"
-    if not by_origin and not head(row).startswith(NOTIFICATION):
+    if origin_kind(row) != "task-notification" and not head(row).startswith(NOTIFICATION):
         return None
     text = _text(row)
     start = text.find("<tool-use-id>")
