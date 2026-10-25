@@ -19,7 +19,7 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 | `hooks/telmoni_claude/` | The package: `payload` (the hook's input), `settings`, `transcript` (rows and what is read of them), `turns` (how turns are cut and when they are complete), `record` (a turn as a run), `send` (the SDK, and what its warnings mean), `state` (the session's file and lock), `worker`, `log`. |
 | `tests/` | pytest: `conftest.py` writes transcripts as Claude Code does and stands in for Telmoni; `test_worker.py` runs the hook end to end, the SDK included. |
 | `pyproject.toml`, `uv.lock` | The development tools alone (ruff, pytest), locked; the hook's one dependency is the script's header. |
-| `.github/workflows/` | `ci.yml`: the suite on Python 3.10 and 3.14, ruff, a smoke run of the hook, the manifests. `release.yml`: on `main`, tags a version bump and cuts the release once the owner approves the `release` environment. |
+| `.github/workflows/` | `ci.yml`: the suite on Python 3.10 and 3.14, ruff, a smoke run of the hook, the manifests, and the workflows themselves under actionlint. `release.yml`: on `main`, tags a version bump and cuts the release once the owner approves the `release` environment. |
 | `ARCHITECTURE.md` | How it runs, what it reads, how turns are cut, what it sends, delivery, state, what ships, decisions. |
 | [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK (`sdk/python`, `record_run`). |
 | [`telmoni/docs`](https://github.com/telmoni/docs) | Sibling repo, checked out as `../docs`: the book; `content/api/coding-agents.mdx` is this plugin's page. |
