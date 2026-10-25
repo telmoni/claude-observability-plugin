@@ -1,0 +1,121 @@
+# Releases the plugin from a commit on main that CI has passed: a release is the
+# version bumped in plugin.json and pyproject.toml in one commit, and nothing else
+# by hand. The commit gets its tag `v*` and a GitHub release, once the owner approves
+# the `release` environment; an install takes the repository at its head, so there
+# is nothing to build or publish. Every other push ends green with nothing done.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: What the version still needs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read # CI's run on this commit
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the version, and ask GitHub for it
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          manifest="$(python3 -c 'import json; print(json.load(open(".claude-plugin/plugin.json"))["version"])')"
+          project="$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$manifest" != "$project" ]; then
+            echo "::error::plugin.json says $manifest and pyproject.toml $project"
+            exit 1
+          fi
+          case "$manifest" in
+            *[!0-9.]*|.*|*.|*..*) echo "::error::$manifest is not a plain X.Y.Z"; exit 1 ;;
+          esac
+          tag=true
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$manifest" >/dev/null 2>&1; then tag=false; fi
+          release=true
+          if gh release view "v$manifest" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then release=false; fi
+          {
+            echo "version=$manifest"
+            echo "tag=$tag"
+            echo "release=$release"
+          } >> "$GITHUB_OUTPUT"
+          echo "### telmoni-observability $manifest: tag $tag, release $release" >> "$GITHUB_STEP_SUMMARY"
+
+      # CI starts beside this run, from the same push; a run it cancels or fails stops this one.
+      - name: Wait for CI to pass on this commit
+        if: steps.plan.outputs.tag == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          run=""
+          for _ in $(seq 1 30); do
+            run="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml --branch main --event push --commit "$SHA" --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            [ -n "$run" ] && break
+            sleep 10
+          done
+          if [ -z "$run" ]; then
+            echo "::error::CI has no run on ${SHA:0:12}"
+            exit 1
+          fi
+          if ! gh run watch "$run" --repo "$GITHUB_REPOSITORY" --exit-status --interval 30 >/dev/null; then
+            echo "::error::CI did not pass on ${SHA:0:12}: re-run this release once it has, or push again"
+            exit 1
+          fi
+
+  tag:
+    name: Tag v${{ needs.plan.outputs.version }}
+    needs: plan
+    if: needs.plan.outputs.tag == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment:
+      name: release
+      url: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.plan.outputs.version }}
+    permissions:
+      contents: write # the tag
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      SHA: ${{ github.sha }}
+    steps:
+      # Nothing of the repository runs here: the tag is made through the API.
+      - run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/v$VERSION" -f sha="$SHA"
+
+  release:
+    name: The GitHub release
+    needs: [plan, tag]
+    if: >-
+      !cancelled() && needs.plan.outputs.release == 'true' &&
+      !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # the release
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - run: |
+          set -euo pipefail
+          gh release create "v$VERSION" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "v$VERSION"

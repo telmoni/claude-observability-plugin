@@ -1,0 +1,29 @@
+{
+  "name": "telmoni-observability",
+  "displayName": "Telmoni Observability",
+  "version": "0.1.0",
+  "description": "Records each turn of your Claude Code sessions in Telmoni as a run: the models and their tokens, the tools, the subagents and the times. Never a prompt, a reply, a thought, a tool's input or output, or a path.",
+  "author": {
+    "name": "Telmoni",
+    "email": "hello@telmoni.com",
+    "url": "https://telmoni.com"
+  },
+  "homepage": "https://telmoni.com/docs/api/coding-agents",
+  "repository": "https://github.com/telmoni/claude-observability-plugin",
+  "license": "Apache-2.0",
+  "keywords": ["observability", "monitoring", "telemetry", "tracing"],
+  "userConfig": {
+    "TELMONI_API_KEY": {
+      "type": "string",
+      "title": "Telmoni API key",
+      "description": "A project API key with the ingest scope (telmoni_…), from the project's API keys page.",
+      "sensitive": true
+    },
+    "TELMONI_ENDPOINT": {
+      "type": "string",
+      "title": "Telmoni endpoint",
+      "description": "Leave empty for https://api.telmoni.com. A self-hosted Telmoni gives its machine host.",
+      "default": ""
+    }
+  }
+}
