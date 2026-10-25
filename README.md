@@ -11,7 +11,7 @@ claude plugin marketplace add telmoni/claude-observability-plugin
 claude plugin install telmoni-observability@telmoni-plugins
 ```
 
-This repository is the marketplace, and the plugin is the repository itself: an install takes it at its head, and `claude plugin update telmoni-observability@telmoni-plugins` takes the next one. Installed so, the plugin loads in every Claude Code you start: the terminal's, an editor's, the Agent SDK's. Plugins load as a session starts, so start a new one once it is installed and configured.
+This repository is the marketplace, and the plugin is the repository itself: an install copies it at its head, and `claude plugin update telmoni-observability@telmoni-plugins` takes the next release, Claude Code keeping the copy it has until the plugin's version changes. Installed so, the plugin loads in every Claude Code you start: the terminal's, an editor's, the Agent SDK's. Plugins load as a session starts, so start a new one once it is installed and configured.
 
 ### From a checkout
 
