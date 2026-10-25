@@ -5,13 +5,20 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # Windows locks a byte of the file instead
+    fcntl = None  # type: ignore[assignment]
+    import msvcrt
+
 SENT_KEPT = 500
+# Runs kept for a Telmoni that stays away: the newest, so the file stays small and current.
+PENDING_KEPT = 200
 
 
 @dataclass
@@ -56,66 +63,61 @@ class State:
         if run_id not in self.sent:
             self.sent.append(run_id)
 
-
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    def trim_pending(self) -> int:
+        """Lets the oldest pending runs go past the cap; how many went."""
+        over = len(self.pending) - PENDING_KEPT
+        if over <= 0:
+            return 0
+        del self.pending[:over]
+        return over
 
 
 class Lock:
-    """One worker a session at a time: the file names its holder, and a holder that
-    is gone leaves a lock anyone may take."""
+    """One worker a session at a time, held through the operating system: a holder that
+    dies lets go of it, whatever becomes of its pid, so no stale lock is ever judged."""
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.token = f"{os.getpid()}:{secrets.token_hex(8)}"
-        self.held = False
+        self._fd: int | None = None
 
     def acquire(self, wait: float | None, poll: float = 0.2) -> bool:
-        """Takes the lock, waiting up to `wait` seconds for a live holder, or without
+        """Takes the lock, waiting up to `wait` seconds for its holder, or without
         limit when `wait` is None."""
         deadline = None if wait is None else time.monotonic() + wait
-        while True:
-            try:
-                fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            except FileExistsError:
-                if not self._holder_alive():
-                    self._discard()
-                    continue
-                if deadline is not None and time.monotonic() >= deadline:
-                    return False
-                time.sleep(poll)
-                continue
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(self.token)
-            self.held = True
-            return True
+        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+        while not _lock(fd):
+            if deadline is not None and time.monotonic() >= deadline:
+                os.close(fd)
+                return False
+            time.sleep(poll)
+        self._fd = fd
+        return True
 
     def release(self) -> None:
-        if not self.held:
+        fd, self._fd = self._fd, None
+        if fd is None:
             return
-        self.held = False
-        try:
-            if self.path.read_text(encoding="utf-8") == self.token:
-                self.path.unlink()
-        except OSError:
-            pass
+        # The file stays: removed, a third hook would lock a new one beside a second's.
+        _unlock(fd)
+        os.close(fd)
 
-    def _holder_alive(self) -> bool:
-        try:
-            holder = self.path.read_text(encoding="utf-8")
-        except OSError:
-            return False
-        pid, _, _ = holder.partition(":")
-        return pid.isdigit() and pid_alive(int(pid))
 
-    def _discard(self) -> None:
-        try:
-            self.path.unlink()
-        except OSError:
-            pass
+def _lock(fd: int) -> bool:
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(fd: int) -> None:
+    try:
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        else:
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except OSError:
+        pass

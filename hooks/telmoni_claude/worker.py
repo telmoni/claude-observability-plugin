@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from . import record as records
+from . import state as states
 from . import transcript, turns
 from .log import Log
 from .payload import Payload
@@ -123,6 +124,13 @@ def _deliver(
                 state.mark_sent(run_id)
         offset = turn.next_offset
     state.offset = offset
+    dropped = state.trim_pending()
+    if dropped:
+        log.line(
+            session,
+            event,
+            f"dropped {dropped} runs Telmoni could not take, the newest {states.PENDING_KEPT} kept",
+        )
 
 
 def _read_subagent(known: transcript.Subagent) -> list[transcript.Row]:
