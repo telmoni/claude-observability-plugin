@@ -1,12 +1,13 @@
 from telmoni_claude import settings
 
 
-def test_the_plugins_own_setting_comes_before_the_environment():
+def test_the_environment_comes_before_the_plugins_own_setting():
     both = {"TELMONI_API_KEY": "from-env", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
-    assert settings.option("TELMONI_API_KEY", both) == "from-plugin"
-    assert settings.option("TELMONI_API_KEY", {"TELMONI_API_KEY": "from-env"}) == "from-env"
-    blank = {"TELMONI_API_KEY": "from-env", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "  "}
-    assert settings.option("TELMONI_API_KEY", blank) == "from-env"
+    assert settings.option("TELMONI_API_KEY", both) == "from-env"
+    own = {"CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
+    assert settings.option("TELMONI_API_KEY", own) == "from-plugin"
+    blank = {"TELMONI_API_KEY": "  ", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
+    assert settings.option("TELMONI_API_KEY", blank) == "from-plugin"
 
 
 def test_the_state_lives_in_the_plugins_data_folder(tmp_path):

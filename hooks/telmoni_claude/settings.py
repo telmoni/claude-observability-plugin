@@ -11,9 +11,10 @@ DEFAULT_ENDPOINT = "https://api.telmoni.com"
 
 
 def option(name: str, env: Mapping[str, str]) -> str:
-    """A setting: the plugin's own first, then the environment's; blank is unset."""
-    own = (env.get(f"CLAUDE_PLUGIN_OPTION_{name}") or "").strip()
-    return own or (env.get(name) or "").strip()
+    """A setting: the environment's first, since a repository's `.claude/settings.json` points one
+    checkout at another project where the plugin's own setting is machine-wide; then its own."""
+    given = (env.get(name) or "").strip()
+    return given or (env.get(f"CLAUDE_PLUGIN_OPTION_{name}") or "").strip()
 
 
 def state_dir(env: Mapping[str, str]) -> Path:
