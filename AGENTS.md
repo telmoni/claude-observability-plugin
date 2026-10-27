@@ -21,8 +21,7 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 | `pyproject.toml`, `uv.lock` | The development tools alone (ruff, pytest), locked; the hook's one dependency is the script's header. |
 | `.github/workflows/` | `ci.yml`: the suite on Python 3.10 and 3.14, ruff, a smoke run of the hook, the manifests, and the workflows themselves under actionlint. `release.yml`: on `main`, tags a version bump and cuts the release once the owner approves the `release` environment. |
 | `ARCHITECTURE.md` | How it runs, what it reads, how turns are cut, what it sends, delivery, state, what ships, decisions. |
-| [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK (`sdk/python`, `record_run`). |
-| [`telmoni/docs`](https://github.com/telmoni/docs) | Sibling repo, checked out as `../docs`: the book; `content/api/coding-agents.mdx` is this plugin's page. |
+| [`telmoni/telmoni`](https://github.com/telmoni/telmoni) | Sibling repo, checked out as `../telmoni`: the SDK (`sdk/python`, `record_run`), and the book, whose `web/content/docs/api/coding-agents.mdx` is this plugin's page. |
 
 ## Commands
 - **After every change** (no permission needed; report failures verbatim): `make check` — ruff, the suite, and `claude plugin validate --strict` on the plugin and the marketplace.
@@ -44,5 +43,5 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 ## Definition of Done
 - [ ] `make check` passes, or the failure is reported verbatim.
 - [ ] Nothing of a session reaches an export, the state, the log, a test fixture or a commit.
-- [ ] `ARCHITECTURE.md` and the README say what changed; the book's `content/api/coding-agents.mdx` is fixed or named.
+- [ ] `ARCHITECTURE.md` and the README say what changed; the book's `web/content/docs/api/coding-agents.mdx` (`../telmoni`) is fixed or named.
 - [ ] Nothing that needs asking happened unasked.
