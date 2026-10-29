@@ -35,10 +35,17 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 - Comments are for a person reading the code, and short: they say *why*, never *what* — a doc comment in a line or two, an inline comment in one, a test's name saying what it proves. The reasoning behind a change goes in `ARCHITECTURE.md` or the commit message, never above a function.
 - No AI signatures anywhere.
 
+## Agent Hygiene
+- **This repo only:** change nothing in another repository unless the user says so for this task; that binds subagents too. Reading is fine.
+- Edit `AGENTS.md` only when the user asks outright; otherwise propose a diff.
+- No scripted bulk edits. One-off scripts and logs go in `/tmp/telmoni/`. A fixture is synthetic, written as Claude Code writes a transcript (`tests/conftest.py`), never a recorded session.
+
 ## Git Rules
-- Commit only when asked. Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`) of 1–5 lines, signed off by the developer (`git commit -s`); no file lists, no `Co-authored-by` trailers.
+- Commit only when asked: never `git add` or `git commit` unprompted.
+- Conventional commits (`feat:`, `fix:`, `refactor:`, `docs:`, `chore:`) of 1–5 lines and the sign-off: a subject, then optionally a blank line and up to 3 lines on *why*. No file lists, test output, AI signatures or `Co-authored-by` trailers.
+- Every commit is signed off by the developer it is made for, certifying the [Developer Certificate of Origin](https://developercertificate.org/): `git commit -s` adds `Signed-off-by: Name <email>` from git's `user.name` and `user.email`, which name a person, never an agent. A merge commit too: a branch is merged in a clone, `git merge --no-ff --signoff`, and pushed, never from GitHub's merge button, whose commit carries none.
 - A release is the version bumped in `.claude-plugin/plugin.json` and `pyproject.toml` in one commit on `main`, which CI tags and releases on the owner's approval; never a tag by hand.
-- No branches, worktrees, pushes or pull requests unless asked.
+- No branches, worktrees, pushes or pull requests.
 
 ## Definition of Done
 - [ ] `make check` passes, or the failure is reported verbatim.
