@@ -184,6 +184,7 @@ def _call(telmoni: Any, call: dict[str, Any]) -> Any:
                 cache_write_input_tokens=usage.get("cache_write"),
             ),
             error_type=call.get("error_type"),
+            cancelled=bool(call.get("cancelled")),
         )
     if call["kind"] == "step":
         return telmoni.StepRecord(

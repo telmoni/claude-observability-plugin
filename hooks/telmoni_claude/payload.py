@@ -9,6 +9,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from .transcript import error_kind
+
 EVENTS = ("Stop", "StopFailure", "SessionEnd")
 ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
 # A background task of these kinds can still change the turn it belongs to.
@@ -59,9 +61,7 @@ def parse(raw: str, env: Mapping[str, str]) -> Payload | None:
         return None
     error = None
     if event == "StopFailure":
-        kind = data.get("error")
-        is_kind = isinstance(kind, str) and 0 < len(kind) <= 64 and " " not in kind
-        error = kind if is_kind else "unknown"
+        error = error_kind(data.get("error")) or "unknown"
     tasks = data.get("background_tasks")
     busy = isinstance(tasks, list) and any(
         isinstance(task, dict) and task.get("type") in BUSY_KINDS for task in tasks

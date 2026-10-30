@@ -78,6 +78,7 @@ def _model(call: ModelCall, provider: str) -> dict[str, Any]:
             "cache_write": usage.cache_write,
         },
         "error_type": call.error_type,
+        "cancelled": call.cancelled,
     }
 
 

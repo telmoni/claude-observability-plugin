@@ -270,14 +270,16 @@ def _count(value: Any) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+def error_kind(value: Any) -> str | None:
+    """An error's kind (`rate_limit`): a short word, never a message."""
+    return value if isinstance(value, str) and 0 < len(value) <= 64 and " " not in value else None
+
+
 def api_error(row: Row) -> str | None:
     """The kind of API error a reply row carries (`rate_limit`), never its message."""
     if row.data.get("isApiErrorMessage") is not True:
         return None
-    kind = row.data.get("error")
-    if isinstance(kind, str) and 0 < len(kind) <= 64 and " " not in kind:
-        return kind
-    return "ApiError"
+    return error_kind(row.data.get("error")) or "ApiError"
 
 
 @dataclass(frozen=True)

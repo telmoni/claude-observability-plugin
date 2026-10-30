@@ -5,12 +5,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
 import telmoni_hook
 import telmoni_worker
-from telmoni_claude import __version__, record, state
+from telmoni_claude import __version__, record, state, worker
 from telmoni_claude.send import Sender
 
 from .conftest import KEY, Transcript, assert_metadata_only
@@ -126,6 +127,28 @@ def test_an_interrupted_turn_is_a_cancelled_run(hook, transcript):
     (tool,) = hook.server.by_attr("gen_ai.tool.name", "Bash")
     assert tool["attrs"].get("telmoni.cancelled") is True
     assert "error.type" not in tool["attrs"]
+
+
+def test_a_reply_the_person_cut_short_is_a_cancelled_call(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    transcript.interrupt()
+    hook.run(transcript)
+    (model,) = [s for s in hook.server.spans() if "gen_ai.request.model" in s["attrs"]]
+    assert model["attrs"].get("telmoni.cancelled") is True
+
+
+def test_a_quiet_sessions_lock_is_swept_and_a_recent_one_kept(hook, transcript):
+    old = hook.state_dir / "gone.lock"
+    old.touch()
+    week = time.time() - worker.SWEEP_AFTER_S - 60
+    os.utime(old, (week, week))
+    recent = hook.state_dir / "recent.lock"
+    recent.touch()
+    transcript.prompt()
+    transcript.reply()
+    hook.run(transcript)
+    assert not old.exists() and recent.exists()
 
 
 def test_a_denied_tool_followed_by_a_reply_is_not_a_cancelled_run(hook, transcript):

@@ -17,6 +17,7 @@ class ModelCall:
     end: datetime
     usage: Usage | None = None
     error_type: str | None = None
+    cancelled: bool = False
 
 
 @dataclass
@@ -51,6 +52,8 @@ class Turn:
     _tools: dict[str, ToolCall] = field(default_factory=dict, repr=False)
     # The calls the last result row answered: a refusal's marker right after names them.
     _answered: list[ToolCall] = field(default_factory=list, repr=False)
+    # Whether the last row taken was a reply: an interruption right after cuts it short.
+    _replied: bool = field(default=False, repr=False)
 
     def feed(self, row: Row, last: datetime) -> datetime:
         """Take one row of the turn; gives the time the next row follows from."""
@@ -68,6 +71,9 @@ class Turn:
                 if kind == "tool":
                     for tool in self._answered:
                         tool.cancelled, tool.error_type = True, None
+                elif self._replied and self.model_calls:
+                    self.model_calls[-1].cancelled = True
+                self._replied = False
                 self.ended_by_interruption = True
                 self._later(when)
                 return when
@@ -98,6 +104,7 @@ class Turn:
             self._tools[use.tool_use_id] = tool
             self.tool_calls.append(tool)
         self._answered = []
+        self._replied = True
         self.ended_by_interruption = False
         self._later(when)
 
@@ -115,6 +122,7 @@ class Turn:
                 tool.background = True
             answered.append(tool)
         self._answered = answered
+        self._replied = False
         self._later(when)
 
     def _later(self, when: datetime) -> None:

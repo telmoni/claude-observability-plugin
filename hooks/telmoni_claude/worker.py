@@ -23,6 +23,8 @@ SETTLE_QUIET_S = 0.5
 SETTLE_LIMIT_S = 3.0
 # Each run sent is remembered at most this soon after the last: a catch-up may take hours.
 SAVE_EVERY_S = 1.0
+# A session's lock untouched this long is let go: a session hooks again within days, or not at all.
+SWEEP_AFTER_S = 7 * 24 * 3600.0
 
 
 def run(
@@ -95,6 +97,20 @@ def _run(
         lock.release()
     if reached:
         _send_left(settings, log, session, event, transport, sleep)
+    _sweep_locks(settings)
+
+
+def _sweep_locks(settings: Settings) -> None:
+    """Lock files of sessions gone quiet; a state stays, since read as missing it would send
+    a resumed session from its start, and it keeps no transcript's path to judge it by."""
+    now = time.time()
+    for path in settings.state_dir.glob("*.lock"):
+        if now - _mtime(path) <= SWEEP_AFTER_S:
+            continue
+        lock = Lock(path)
+        if lock.acquire(0):
+            path.unlink(missing_ok=True)  # held, then gone: no hook waits on a deleted file
+            lock.release()
 
 
 def _send_left(
