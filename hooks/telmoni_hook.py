@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.10"
-# dependencies = [
-#   "telmoni>=0.2,<1",
-# ]
+# dependencies = []
 # ///
 """Claude Code's hook: reads the event, hands the session to a worker of its own and
-returns at once, so no turn and no exit waits on Telmoni. `--work` is that worker."""
+returns at once, so no turn and no exit waits on Telmoni. It needs no dependency, so uv
+fetches nothing before it runs; the worker, `telmoni_worker.py`, carries the SDK."""
 
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,8 +29,6 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 def main(argv: list[str]) -> int:
     try:
-        if len(argv) >= 2 and argv[1] == "--work":
-            return worker.run(json.loads(sys.stdin.read()), os.environ)
         given = hook_payload.parse(sys.stdin.read(), os.environ)
         if given is None:
             return 0
@@ -50,9 +48,17 @@ def _start(payload: dict[str, Any]) -> None:
         else {"start_new_session": True}
     )
     log_path = settings.state_dir(os.environ) / "hook.log"
-    with log_path.open("ab") as log:
+    worker_path = str(Path(__file__).resolve().with_name("telmoni_worker.py"))
+    uv = shutil.which("uv")
+    # Through uv where it is: the worker's header names the SDK, fetched there, detached.
+    if uv:
+        command = [uv, "run", "--quiet", "--script", worker_path]
+    else:
+        command = [sys.executable, worker_path]
+    fd = os.open(log_path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+    with os.fdopen(fd, "ab") as log:
         child = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "--work"],
+            command,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
             stderr=log,

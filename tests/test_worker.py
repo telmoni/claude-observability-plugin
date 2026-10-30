@@ -9,6 +9,7 @@ import types
 from pathlib import Path
 
 import telmoni_hook
+import telmoni_worker
 from telmoni_claude import __version__, record, state
 from telmoni_claude.send import Sender
 
@@ -449,9 +450,10 @@ STOP = {
 }
 
 
-def start_hook(monkeypatch, tmp_path, platform=None):
+def start_hook(monkeypatch, tmp_path, platform=None, uv=None):
     started = {}
     pipe = Pipe()
+    monkeypatch.setattr(telmoni_hook.shutil, "which", lambda name: uv)
 
     def popen(args, **options):
         started["args"], started["options"] = args, options
@@ -470,12 +472,18 @@ def start_hook(monkeypatch, tmp_path, platform=None):
 def test_the_hook_hands_the_session_to_a_worker_by_its_stdin_and_returns(monkeypatch, tmp_path):
     started, pipe = start_hook(monkeypatch, tmp_path)
     # The worker's argv is what ps shows: the payload goes by its stdin instead.
-    assert started["args"] == [sys.executable, str(ROOT / "hooks" / "telmoni_hook.py"), "--work"]
+    assert started["args"] == [sys.executable, str(ROOT / "hooks" / "telmoni_worker.py")]
     assert started["options"]["stdin"] is subprocess.PIPE
     assert started["options"]["start_new_session"] is True
     assert pipe.closed and json.loads(pipe.data)["event"] == "Stop"
     kept = "".join(p.read_text(encoding="utf-8") for p in tmp_path.iterdir() if p.is_file())
     assert_metadata_only(pipe.data.decode("utf-8"), kept)
+
+
+def test_with_uv_the_worker_fetches_the_sdk_itself(monkeypatch, tmp_path):
+    started, _ = start_hook(monkeypatch, tmp_path, uv="/usr/bin/uv")
+    worker = str(ROOT / "hooks" / "telmoni_worker.py")
+    assert started["args"] == ["/usr/bin/uv", "run", "--quiet", "--script", worker]
 
 
 def test_on_windows_the_worker_is_detached_by_its_creation_flags(monkeypatch, tmp_path):
@@ -497,7 +505,7 @@ def test_the_worker_reads_its_payload_from_stdin(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
     for name in ("TELMONI_API_KEY", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
-    assert telmoni_hook.main(["telmoni_hook.py", "--work"]) == 0
+    assert telmoni_worker.main() == 0
     assert "no key" in (tmp_path / "hook.log").read_text(encoding="utf-8")
 
 
@@ -556,7 +564,12 @@ def test_the_manifests_agree():
     assert command.count("|| true") == 2 and "exec" not in command
     assert plugin["userConfig"]["TELMONI_API_KEY"]["sensitive"] is True
     assert record.AGENT == "claude-code"
-    assert KEY not in (ROOT / "hooks" / "telmoni_hook.py").read_text(encoding="utf-8")
+    hook = (ROOT / "hooks" / "telmoni_hook.py").read_text(encoding="utf-8")
+    worker = (ROOT / "hooks" / "telmoni_worker.py").read_text(encoding="utf-8")
+    # The hook fetches nothing before it runs: the SDK is the worker's alone.
+    assert "# dependencies = []" in hook and "telmoni>=" not in hook
+    assert '#   "telmoni>=0.2,<1",' in worker
+    assert KEY not in hook and KEY not in worker
 
 
 def hook_command():
