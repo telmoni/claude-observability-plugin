@@ -252,10 +252,14 @@ def usage(row: Row) -> Usage | None:
         write = sum(parts) if parts else None
     if write is None:
         write = _count(raw.get("cache_creation_input_tokens"))
+    # Anthropic leaves the cache out of `input_tokens`; the conventions' input holds it.
+    uncached = _count(raw.get("input_tokens"))
+    read = _count(raw.get("cache_read_input_tokens"))
+    counted = [n for n in (uncached, read, write) if n is not None]
     return Usage(
-        input=_count(raw.get("input_tokens")),
+        input=sum(counted) if counted else None,
         output=_count(raw.get("output_tokens")),
-        cache_read=_count(raw.get("cache_read_input_tokens")),
+        cache_read=read,
         cache_write=write,
     )
 

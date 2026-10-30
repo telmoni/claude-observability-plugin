@@ -71,7 +71,7 @@ def test_a_notice_names_its_tool_call_and_a_launch_its_agent(transcript):
     assert t.async_agent(found[2]) is None
 
 
-def test_usage_sums_the_cache_writes_and_falls_back_to_the_flat_count(transcript):
+def test_usage_counts_the_cache_inside_input_and_sums_its_writes(transcript):
     transcript.reply(message_id="a")
     transcript.reply(
         message_id="b",
@@ -79,8 +79,8 @@ def test_usage_sums_the_cache_writes_and_falls_back_to_the_flat_count(transcript
     )
     transcript.reply(message_id="c", usage={"input_tokens": "many"})
     a, b, c = (t.usage(row) for row in rows(transcript))
-    assert (a.input, a.output, a.cache_read, a.cache_write) == (10, 20, 5, 3)
-    assert (b.cache_read, b.cache_write) == (None, 7)
+    assert (a.input, a.output, a.cache_read, a.cache_write) == (18, 20, 5, 3)
+    assert (b.input, b.cache_read, b.cache_write) == (8, None, 7)
     assert (c.input, c.output) == (None, None)
 
 

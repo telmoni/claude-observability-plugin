@@ -46,7 +46,7 @@ def test_a_turn_becomes_a_run_with_its_calls_in_order(transcript):
     assert [c.get("name") for c in made["calls"]][1:3] == ["Skill", "Bash"]
     assert made["calls"][2]["error_type"] == "ToolError"
     assert made["calls"][0]["usage"] == {
-        "input": 10,
+        "input": 18,
         "output": 20,
         "cache_read": 5,
         "cache_write": 3,

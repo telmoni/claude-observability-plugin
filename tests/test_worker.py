@@ -27,7 +27,7 @@ def test_a_turn_is_sent_as_a_run(hook, transcript):
     assert run["resource"]["service.version"] == "2.1.310"
     models = [s for s in hook.server.spans() if "gen_ai.request.model" in s["attrs"]]
     assert len(models) == 2
-    assert models[0]["attrs"]["gen_ai.usage.input_tokens"] == 10
+    assert models[0]["attrs"]["gen_ai.usage.input_tokens"] == 18
     assert models[0]["attrs"]["gen_ai.usage.cache_read.input_tokens"] == 5
     assert models[0]["attrs"]["gen_ai.usage.cache_write.input_tokens"] == 3
     (tool,) = hook.server.by_attr("gen_ai.tool.name", "Bash")
