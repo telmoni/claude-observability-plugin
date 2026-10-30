@@ -8,6 +8,7 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from .log import Log
@@ -27,9 +28,16 @@ FINAL_STATUSES = (400, 402, 413, 500)
 DATABASE_FAILED = "/errors/internal/database"
 
 
+class Outcome(Enum):
+    SENT = "sent"
+    PARTIAL = "partial"
+    REFUSED = "refused"
+    UNDELIVERED = "undelivered"
+
+
 @dataclass(frozen=True)
 class Verdict:
-    outcome: str  # sent | partial | refused | undelivered
+    outcome: Outcome
     detail: str = ""
 
 
@@ -39,21 +47,27 @@ def flush_seconds(count: int) -> float:
 
 def judge(warnings: list[str], flushed: bool) -> Verdict:
     """What the SDK's warnings say happened to the run."""
+    # Anything not delivered keeps the run, whatever else was refused beside it.
+    for text in warnings:
+        if any(marker in text for marker in UNDELIVERED) or _kept_refusal(text):
+            return Verdict(Outcome.UNDELIVERED, text)
+    if not flushed:
+        return Verdict(Outcome.UNDELIVERED, "the flush timed out")
     for text in warnings:
         if "export refused with" in text:
-            status = _status(text)
-            if status in FINAL_STATUSES and not (status == 500 and DATABASE_FAILED in text):
-                return Verdict("refused", text)
-            return Verdict("undelivered", text)
-    for text in warnings:
-        if any(marker in text for marker in UNDELIVERED):
-            return Verdict("undelivered", text)
-    if not flushed:
-        return Verdict("undelivered", "the flush timed out")
+            return Verdict(Outcome.REFUSED, text)
     for text in warnings:
         if any(marker in text for marker in PARTIAL):
-            return Verdict("partial", text)
-    return Verdict("sent")
+            return Verdict(Outcome.PARTIAL, text)
+    return Verdict(Outcome.SENT)
+
+
+def _kept_refusal(text: str) -> bool:
+    """A refusal a second try may get past: not one of the final statuses, or Telmoni's database."""
+    status = _status(text) if "export refused with" in text else None
+    return status is not None and (
+        status not in FINAL_STATUSES or (status == 500 and DATABASE_FAILED in text)
+    )
 
 
 def _status(text: str) -> int | None:
@@ -101,7 +115,12 @@ class Sender:
                     self.event,
                     "the telmoni SDK is not installed for python3: install uv, or pip install it",
                 )
-            return Verdict("undelivered", "no SDK")
+            return Verdict(Outcome.UNDELIVERED, "no SDK")
+        try:
+            built = _to_sdk(telmoni, record)
+        except (KeyError, TypeError, ValueError) as fault:
+            # A kept record of another shape: dropped and named, so the session's later runs go.
+            return Verdict(Outcome.REFUSED, f"the record did not build: {type(fault).__name__}")
         try:
             config = telmoni.Config(
                 endpoint=self.settings.endpoint,
@@ -113,18 +132,18 @@ class Sender:
             if not warned.get("endpoint"):
                 warned["endpoint"] = True
                 self.log.line(self.session, self.event, f"endpoint refused: {refusal}")
-            return Verdict("undelivered", "endpoint refused")
+            return Verdict(Outcome.UNDELIVERED, "endpoint refused")
         client = telmoni.Telmoni(config, transport=self.transport, sleep=self.sleep)
         heard = _Warnings()
         logger = logging.getLogger("telmoni")
         logger.addHandler(heard)
         try:
             try:
-                client.record_run(_to_sdk(telmoni, record))
+                client.record_run(built)
             except telmoni.QueueFullError:
-                return Verdict("refused", "more spans than the SDK's queue holds")
+                return Verdict(Outcome.REFUSED, "more spans than the SDK's queue holds")
             except (TypeError, ValueError) as fault:
-                return Verdict("refused", f"the SDK refused the run: {fault}")
+                return Verdict(Outcome.REFUSED, f"the SDK refused the run: {fault}")
             flushed = client.flush(timeout_s=flush_seconds(spans(record)))
         finally:
             # Whatever happened, the exporter's thread ends with the client, so the worker can exit.

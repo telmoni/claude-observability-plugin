@@ -13,7 +13,7 @@ from . import state as states
 from . import transcript, turns
 from .log import Log
 from .payload import Payload
-from .send import Sender, Verdict
+from .send import Outcome, Sender, Verdict
 from .settings import Settings
 from .state import Lock, State
 
@@ -21,6 +21,8 @@ from .state import Lock, State
 STOP_WAIT_S = 60.0
 SETTLE_QUIET_S = 0.5
 SETTLE_LIMIT_S = 3.0
+# Each run sent is remembered at most this soon after the last: a catch-up may take hours.
+SAVE_EVERY_S = 1.0
 
 
 def run(
@@ -51,23 +53,27 @@ def _run(
 ) -> None:
     session, event = given.session_id, given.event
     state_path = settings.state_dir / f"{session}.json"
-    state = State.load(state_path)
-    if not settings.api_key:
-        if not state.warned.get("key"):
-            state.warned["key"] = True
-            state.save(state_path)
-            log.line(
-                session,
-                event,
-                "no key: set TELMONI_API_KEY as a plugin setting or in the environment",
-            )
-        return
     lock = Lock(settings.state_dir / f"{session}.lock")
     if not lock.acquire(None if event == "SessionEnd" else STOP_WAIT_S):
         log.line(session, event, "another hook holds the session; the next hook sends")
         return
     try:
-        state = State.load(state_path)
+        try:
+            state = State.load(state_path)
+        except (OSError, ValueError) as fault:
+            # Left as it is: read as new, it would send the session again and lose its kept runs.
+            log.line(session, event, f"state not read ({type(fault).__name__}); nothing sent")
+            return
+        if not settings.api_key:
+            if not state.warned.get("key"):
+                state.warned["key"] = True
+                state.save(state_path)
+                log.line(
+                    session,
+                    event,
+                    "no key: set TELMONI_API_KEY as a plugin setting or in the environment",
+                )
+            return
         path = Path(given.transcript_path)
         if not path.is_file():
             log.line(session, event, "no transcript at the path given")
@@ -79,10 +85,30 @@ def _run(
         subagents = transcript.discover_subagents(path)
         found = turns.assemble(read.rows, session, read.end)
         sender = Sender(settings, log, session, event, transport, sleep)
-        _deliver(state, found, sender, given, subagents, log)
-        state.save(state_path)
+        saver = _Saver(state, state_path)
+        try:
+            _deliver(state, found, sender, given, subagents, log, saver)
+        finally:
+            saver.save()
     finally:
         lock.release()
+
+
+class _Saver:
+    """Saves the state as each run goes, at most once in `SAVE_EVERY_S`, and whenever asked."""
+
+    def __init__(self, state: State, path: Path) -> None:
+        self.state = state
+        self.path = path
+        self.last = time.monotonic()
+
+    def __call__(self) -> None:
+        if time.monotonic() - self.last >= SAVE_EVERY_S:
+            self.save()
+
+    def save(self) -> None:
+        self.state.save(self.path)
+        self.last = time.monotonic()
 
 
 def _deliver(
@@ -92,25 +118,28 @@ def _deliver(
     given: Payload,
     subagents: dict[str, transcript.Subagent],
     log: Log,
+    saved: Callable[[], None],
 ) -> None:
     session, event = given.session_id, given.event
     # What Telmoni could not take before goes first, and holds what follows.
     while state.pending:
         verdict = sender.send(state.pending[0], state.warned)
         _note(log, session, event, state.pending[0], verdict)
-        if verdict.outcome == "undelivered":
+        if verdict.outcome is Outcome.UNDELIVERED:
             break
-        state.mark_sent(state.pending.pop(0)["run_id"])
-    offset = state.offset
+        gone = state.pending.pop(0).get("run_id")
+        if isinstance(gone, str):
+            state.mark_sent(gone)
+        saved()
     for turn in found:
         run_id = records.run_id(session, turn.prompt_uuid)
         if run_id in state.sent:
-            offset = turn.next_offset
+            state.offset = turn.next_offset
             continue
         if not turns.is_complete(turn, event, given.busy, subagents):
             break
         if not turn.model_calls and not turn.tool_calls:
-            offset = turn.next_offset
+            state.offset = turn.next_offset
             continue
         made = records.build(turn, session, event, given.error, subagents, _read_subagent)
         if state.pending:
@@ -118,12 +147,12 @@ def _deliver(
         else:
             verdict = sender.send(made, state.warned)
             _note(log, session, event, made, verdict)
-            if verdict.outcome == "undelivered":
+            if verdict.outcome is Outcome.UNDELIVERED:
                 state.pending.append(made)
             else:
                 state.mark_sent(run_id)
-        offset = turn.next_offset
-    state.offset = offset
+        state.offset = turn.next_offset
+        saved()
     dropped = state.trim_pending()
     if dropped:
         log.line(
@@ -141,12 +170,12 @@ def _read_subagent(known: transcript.Subagent) -> list[transcript.Row]:
 
 
 def _note(log: Log, session: str, event: str, made: dict[str, Any], verdict: Verdict) -> None:
-    run_id = made["run_id"][:8]
-    if verdict.outcome == "sent":
+    run_id = str(made.get("run_id"))[:8]
+    if verdict.outcome is Outcome.SENT:
         log.line(session, event, f"sent {run_id}")
-    elif verdict.outcome == "partial":
+    elif verdict.outcome is Outcome.PARTIAL:
         log.line(session, event, f"taken in part {run_id}: {verdict.detail}")
-    elif verdict.outcome == "refused":
+    elif verdict.outcome is Outcome.REFUSED:
         log.line(session, event, f"refused, not sent again {run_id}: {verdict.detail}")
     else:
         log.line(

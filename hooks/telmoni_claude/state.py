@@ -32,12 +32,14 @@ class State:
 
     @classmethod
     def load(cls, path: Path) -> State:
+        """The session's state, new where none was saved; one that cannot be read raises,
+        since read as new it would send the whole session again and lose its kept runs."""
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return cls()
         if not isinstance(data, dict):
-            return cls()
+            raise ValueError("the state is not an object")
         state = cls()
         offset = data.get("offset")
         if isinstance(offset, int) and offset >= 0:
@@ -54,10 +56,15 @@ class State:
         return state
 
     def save(self, path: Path) -> None:
+        """Written aside and synced before it replaces the last, so a power cut leaves one whole."""
         self.sent = self.sent[-SENT_KEPT:]
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(asdict(self)), encoding="utf-8")
-        temporary.replace(path)
+        temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        with os.fdopen(os.open(temporary, flags, 0o600), "wb") as f:
+            f.write(json.dumps(asdict(self)).encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
 
     def mark_sent(self, run_id: str) -> None:
         if run_id not in self.sent:

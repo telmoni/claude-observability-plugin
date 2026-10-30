@@ -10,6 +10,7 @@ from pathlib import Path
 
 import telmoni_hook
 from telmoni_claude import __version__, record, state
+from telmoni_claude.send import Sender
 
 from .conftest import KEY, assert_metadata_only
 
@@ -220,6 +221,60 @@ def test_what_telmoni_could_not_take_goes_first_next_time(hook, transcript):
     assert [run["attrs"]["telmoni.run_id"] for run in runs][0] == first_id
     assert len(runs) == 2
     assert hook.state("session-one")["pending"] == []
+
+
+def test_an_unreadable_state_is_left_alone_and_nothing_is_sent(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    path = hook.state_dir / "session-one.json"
+    path.write_text('{"offset": 0, "sent": [', encoding="utf-8")
+    hook.run(transcript)
+    assert hook.server.exports == []
+    assert path.read_text(encoding="utf-8") == '{"offset": 0, "sent": ['
+    assert "state not read (JSONDecodeError); nothing sent" in hook.log()
+
+
+def test_runs_sent_before_a_fault_are_remembered(hook, transcript, monkeypatch):
+    transcript.prompt()
+    transcript.reply()
+    transcript.prompt()
+    transcript.reply(message_id="msg_2")
+    sent = Sender.send
+    calls = []
+
+    def once_then_fail(self, record, warned):
+        calls.append(record["run_id"])
+        if len(calls) > 1:
+            raise RuntimeError("the worker died here")
+        return sent(self, record, warned)
+
+    monkeypatch.setattr(Sender, "send", once_then_fail)
+    hook.run(transcript)
+    assert "failed: RuntimeError" in hook.log()
+    assert hook.state("session-one")["sent"] == calls[:1]
+    monkeypatch.setattr(Sender, "send", sent)
+    hook.run(transcript)
+    assert [run["attrs"]["telmoni.run_id"] for run in hook.server.runs()] == calls
+
+
+def test_a_kept_run_that_will_not_build_is_dropped_and_the_rest_go(hook, transcript):
+    path = hook.state_dir / "session-one.json"
+    path.write_text(json.dumps({"pending": [{"run_id": "old-shape"}]}), encoding="utf-8")
+    transcript.prompt()
+    transcript.reply()
+    hook.run(transcript)
+    assert len(hook.server.runs()) == 1
+    assert "the record did not build: KeyError" in hook.log()
+    state = hook.state("session-one")
+    assert state["pending"] == [] and "old-shape" in state["sent"]
+
+
+def test_the_state_is_the_owners_alone(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    hook.run(transcript)
+    assert (hook.state_dir / "session-one.json").stat().st_mode & 0o777 == 0o600
+    assert not list(hook.state_dir.glob("*.tmp"))
 
 
 def test_a_refusal_is_final(hook, transcript):

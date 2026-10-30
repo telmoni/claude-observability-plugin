@@ -1,5 +1,5 @@
 import pytest
-from telmoni_claude.send import flush_seconds, judge
+from telmoni_claude.send import Outcome, flush_seconds, judge
 
 
 @pytest.mark.parametrize(
@@ -25,17 +25,26 @@ from telmoni_claude.send import flush_seconds, judge
     ],
 )
 def test_what_the_sdks_warnings_mean(warning, outcome):
-    assert judge([warning], True).outcome == outcome
+    assert judge([warning], True).outcome.value == outcome
 
 
 def test_a_flush_that_timed_out_is_sent_again():
-    assert judge([], False).outcome == "undelivered"
-    assert judge([], True).outcome == "sent"
+    assert judge([], False).outcome is Outcome.UNDELIVERED
+    assert judge([], True).outcome is Outcome.SENT
 
 
 def test_a_refusal_outranks_a_dropped_field():
     both = ["telmoni: the server dropped x (y)", "telmoni: export refused with 400 /e"]
-    assert judge(both, True).outcome == "refused"
+    assert judge(both, True).outcome is Outcome.REFUSED
+
+
+def test_a_batch_not_delivered_keeps_the_run_beside_one_refused():
+    both = [
+        "telmoni: export refused with 400 /errors/telemetry/invalid-batch; dropped",
+        "telmoni: export failed after 3 attempts (503); the batch was dropped",
+    ]
+    assert judge(both, True).outcome is Outcome.UNDELIVERED
+    assert judge(list(reversed(both)), True).outcome is Outcome.UNDELIVERED
 
 
 def test_a_flush_waits_out_the_sdks_worst_case():
