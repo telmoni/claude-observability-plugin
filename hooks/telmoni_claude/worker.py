@@ -206,6 +206,7 @@ def _deliver(
             state.offset = turn.next_offset
             continue
         if not turns.is_complete(turn, event, given.busy, subagents):
+            log.line(session, event, f"held {run_id[:8]}: its turn is not over yet")
             break
         if not turn.model_calls and not turn.tool_calls:
             state.offset = turn.next_offset

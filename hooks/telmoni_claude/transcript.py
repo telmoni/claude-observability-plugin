@@ -210,6 +210,18 @@ def notification_tool_use_id(row: Row) -> str | None:
     return tool_use_id or None
 
 
+def handback_agent(row: Row) -> str | None:
+    """The subagent whose final report a row hands back, read off its origin, never the report."""
+    if (
+        row.type != "user"
+        or origin_kind(row) != "peer"
+        or row.data["origin"].get("handback") is not True
+    ):
+        return None
+    agent_id = row.data["origin"].get("from")
+    return agent_id if isinstance(agent_id, str) and agent_id else None
+
+
 def async_agent(row: Row) -> str | None:
     """The id of a subagent a tool result says runs in the background, else None."""
     tool_use = row.data.get("toolUseResult")

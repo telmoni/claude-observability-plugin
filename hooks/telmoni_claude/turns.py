@@ -30,8 +30,10 @@ class ToolCall:
     cancelled: bool = False
     skill: str | None = None
     subagent_type: str | None = None
-    # Started in the background: its notice, and the reply to it, close the turn.
+    # Started in the background: its notice or its report handed back, and the reply to it,
+    # close the turn.
     background: bool = False
+    agent_id: str | None = None
     notified: bool = False
     replied: bool = False
 
@@ -125,6 +127,7 @@ class Turn:
             tool.error_type = "ToolError" if result.is_error and not result.interrupted else None
             if agent is not None:
                 tool.background = True
+                tool.agent_id = agent
             answered.append(tool)
         self._answered = answered
         self._replied = False
@@ -169,17 +172,21 @@ def assemble(rows: list[Row], session_id: str, end: int) -> list[Turn]:
 
 
 def _notice(row: Row, tools: dict[str, ToolCall]) -> None:
-    """A task's notice marks the background call it answers; the reply after it, in whatever
-    turn, says the session went on."""
+    """A task's notice, or its subagent's report handed back, marks the background call it
+    answers, whichever lands first; the reply after it, in whatever turn, says the session
+    went on."""
     if row.type == "assistant":
         for tool in tools.values():
             if tool.notified:
                 tool.replied = True
         return
     named = t.notification_tool_use_id(row)
-    if named and named in tools:
-        tools[named].notified = True
-        tools[named].replied = False
+    if named is None and (agent_id := t.handback_agent(row)) is not None:
+        named = next((k for k, tool in tools.items() if tool.agent_id == agent_id), None)
+    tool = tools.get(named) if named else None
+    if tool is not None and not tool.notified:
+        tool.notified = True
+        tool.replied = False
 
 
 def collect(rows: list[Row]) -> tuple[list[ModelCall], list[ToolCall], datetime | None]:

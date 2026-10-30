@@ -273,6 +273,7 @@ def test_a_background_subagent_holds_the_turn_until_its_notice_is_answered(hook,
     hook.run(transcript)
     assert hook.server.exports == []
     assert hook.state("session-one")["offset"] == 0
+    assert "held" in hook.log()
     transcript.notice("tu1")
     transcript.reply(message_id="msg_2")
     hook.run(transcript)
@@ -286,6 +287,19 @@ def test_a_background_subagent_holds_the_turn_until_its_notice_is_answered(hook,
         "tool",
     ]
     assert_metadata_only(*hook.server.bodies, hook.kept())
+
+
+def test_a_report_handed_back_before_its_notice_sends_the_turn_and_none_of_the_report(
+    hook, transcript
+):
+    launch_background(transcript)
+    transcript.handback("abc")
+    transcript.reply(message_id="msg_2")
+    hook.run(transcript)
+    (run,) = hook.server.runs()
+    (step,) = hook.server.named("subagent Explore")
+    assert step["parentSpanId"] == run["spanId"]
+    assert_metadata_only(*hook.server.bodies, hook.kept(), hook.log())
 
 
 def test_a_subagent_still_running_holds_the_turn(hook, transcript):

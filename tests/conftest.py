@@ -173,6 +173,14 @@ class Transcript:
         self.tick()
         return self.row("user", {"role": "user", "content": text})
 
+    def handback(self, agent_id: str) -> dict[str, Any]:
+        """A background subagent's report handed back, as Claude Code 2.1.314 writes one."""
+        self.tick()
+        report = "TOOL-OUTPUT-NEVER-SENT"
+        origin = {"kind": "peer", "from": agent_id, "handback": True, "handbackReportText": report}
+        text = f'Another Claude session sent a message: <agent-message from="{agent_id}"> {report}'
+        return self.row("user", {"role": "user", "content": text}, isMeta=True, origin=origin)
+
     def companion(self) -> dict[str, Any]:
         self.tick(0.1)
         return self.row(

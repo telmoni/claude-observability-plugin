@@ -100,6 +100,7 @@ def test_a_background_subagent_keeps_the_turn_waiting(transcript):
     (turn,), _ = build(transcript)
     assert not turns.is_complete(turn, "Stop", False, {})
     transcript.reply(message_id="msg_2")
+    transcript.handback("abc")
     (turn,), _ = build(transcript)
     assert turns.is_complete(turn, "Stop", False, {})
     assert not turns.is_complete(turn, "Stop", True, {})
@@ -108,6 +109,25 @@ def test_a_background_subagent_keeps_the_turn_waiting(transcript):
     transcript.prompt()
     closed, _ = build(transcript)[0]
     assert turns.is_complete(closed, "Stop", True, {})
+
+
+def test_a_report_handed_back_and_replied_to_closes_the_turn_before_its_notice(transcript):
+    transcript.prompt()
+    transcript.reply(
+        tool_uses=(("tu1", "Agent", {"subagent_type": "Explore", "run_in_background": True}),)
+    )
+    transcript.result("tu1", async_agent="abc")
+    transcript.handback("someone-else")
+    transcript.reply(message_id="msg_2")
+    (turn,), _ = build(transcript)
+    assert not turns.is_complete(turn, "Stop", False, {})
+    transcript.handback("abc")
+    transcript.reply(message_id="msg_3")
+    (turn,), _ = build(transcript)
+    assert turns.is_complete(turn, "Stop", False, {})
+    transcript.notice("tu1")
+    (turn,), _ = build(transcript)
+    assert turns.is_complete(turn, "Stop", False, {})
 
 
 def test_what_ended_a_turn_in_error(transcript):
