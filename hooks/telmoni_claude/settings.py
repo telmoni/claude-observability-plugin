@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 from collections.abc import Mapping
@@ -47,6 +48,9 @@ def _usable(path: Path) -> Path | None:
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
         return None
+    # mkdir's mode is a new folder's alone: one an earlier version made stays open to others.
+    with contextlib.suppress(OSError):
+        path.chmod(0o700)
     return path if os.access(path, os.W_OK | os.X_OK) else None
 
 

@@ -49,3 +49,11 @@ def test_a_relative_config_folder_is_never_taken(tmp_path, monkeypatch):
 def test_the_state_folder_is_the_owners_alone(tmp_path):
     made = settings.state_dir({"CLAUDE_PLUGIN_DATA": str(tmp_path / "data")})
     assert made.stat().st_mode & 0o777 == 0o700
+
+
+def test_a_state_folder_an_earlier_version_left_open_is_closed(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir(mode=0o755)
+    data.chmod(0o755)
+    settings.state_dir({"CLAUDE_PLUGIN_DATA": str(data)})
+    assert data.stat().st_mode & 0o777 == 0o700
