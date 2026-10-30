@@ -178,7 +178,15 @@ def _deliver(
         if not turn.model_calls and not turn.tool_calls:
             state.offset = turn.next_offset
             continue
-        made = records.build(turn, session, event, given.error, subagents, _read_subagent)
+        made = records.build(
+            turn,
+            session,
+            event,
+            given.error,
+            subagents,
+            _read_subagent,
+            sender.settings.provider,
+        )
         if state.pending:
             state.pending.append(made)
         else:

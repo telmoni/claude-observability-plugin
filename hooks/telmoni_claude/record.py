@@ -11,7 +11,6 @@ from .transcript import Row, Subagent
 from .turns import ModelCall, ToolCall, Turn, collect, error_type
 
 AGENT = "claude-code"
-PROVIDER = "anthropic"
 NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://telmoni.com/claude-observability-plugin")
 TAG_MAX = 256
 
@@ -28,14 +27,17 @@ def build(
     payload_error: str | None,
     subagents: dict[str, Subagent],
     read: Callable[[Subagent], list[Row]],
+    provider: str = "anthropic",
 ) -> dict[str, Any]:
-    calls: list[dict[str, Any]] = [_model(call) for call in turn.model_calls]
+    calls: list[dict[str, Any]] = [_model(call, provider) for call in turn.model_calls]
     skills: list[str] = []
     for tool in turn.tool_calls:
         if tool.skill and tool.skill not in skills:
             skills.append(tool.skill)
         known = subagents.get(tool.tool_use_id)
-        calls.append(_step(tool, known, read, turn.end) if known else _tool(tool, turn.end))
+        calls.append(
+            _step(tool, known, read, turn.end, provider) if known else _tool(tool, turn.end)
+        )
     calls.sort(key=lambda call: call["start"])
     record: dict[str, Any] = {
         "run_id": run_id(session_id, turn.prompt_uuid),
@@ -59,11 +61,12 @@ def _skills(names: list[str]) -> str:
     return joined[:TAG_MAX]
 
 
-def _model(call: ModelCall) -> dict[str, Any]:
+def _model(call: ModelCall, provider: str) -> dict[str, Any]:
     usage = call.usage
     return {
         "kind": "model",
         "model": call.model,
+        "provider": provider,
         "start": _iso(call.start),
         "end": _iso(max(call.end, call.start)),
         "usage": None
@@ -92,11 +95,15 @@ def _tool(tool: ToolCall, turn_end: datetime) -> dict[str, Any]:
 
 
 def _step(
-    tool: ToolCall, known: Subagent, read: Callable[[Subagent], list[Row]], turn_end: datetime
+    tool: ToolCall,
+    known: Subagent,
+    read: Callable[[Subagent], list[Row]],
+    turn_end: datetime,
+    provider: str,
 ) -> dict[str, Any]:
     models, tools, ended = collect(read(known))
     end = max(filter(None, (tool.end, ended, tool.start)))
-    inner = [_model(call) for call in models] + [_tool(call, end) for call in tools]
+    inner = [_model(call, provider) for call in models] + [_tool(call, end) for call in tools]
     inner.sort(key=lambda call: call["start"])
     kind = tool.subagent_type or known.agent_type
     return {

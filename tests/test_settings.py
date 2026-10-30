@@ -25,3 +25,11 @@ def test_settings_read_their_defaults(tmp_path):
     read = settings.Settings.read({"CLAUDE_CONFIG_DIR": str(tmp_path)})
     assert read.api_key is None
     assert read.endpoint == settings.DEFAULT_ENDPOINT
+
+
+def test_the_provider_follows_claude_codes_switches():
+    assert settings.provider_of({}) == "anthropic"
+    assert settings.provider_of({"CLAUDE_CODE_USE_BEDROCK": "1"}) == "aws.bedrock"
+    assert settings.provider_of({"CLAUDE_CODE_USE_VERTEX": "TRUE"}) == "gcp.vertex_ai"
+    assert settings.provider_of({"CLAUDE_CODE_USE_FOUNDRY": "1"}) == "azure.ai.inference"
+    assert settings.provider_of({"CLAUDE_CODE_USE_BEDROCK": "0"}) == "anthropic"

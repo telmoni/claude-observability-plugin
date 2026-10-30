@@ -67,6 +67,37 @@ def test_names_a_model_wrote_leave_as_plain_names_and_a_long_one_loses_nothing(h
     assert_metadata_only(*hook.server.bodies, hook.kept(), hook.log())
 
 
+def test_the_provider_is_the_cloud_claude_code_is_set_to(hook, transcript, tmp_path):
+    transcript.prompt()
+    transcript.reply()
+    hook.run(transcript, env={"CLAUDE_CODE_USE_BEDROCK": "1"})
+    other = Transcript(tmp_path / "projects" / "p" / "session-two.jsonl", "session-two")
+    other.prompt()
+    other.reply()
+    hook.run(other)
+    providers = [
+        s["attrs"]["gen_ai.provider.name"]
+        for s in hook.server.spans()
+        if "gen_ai.request.model" in s["attrs"]
+    ]
+    assert providers == ["aws.bedrock", "anthropic"]
+
+
+def test_a_run_kept_without_a_provider_goes_as_anthropics(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    hook.server.answers = [503, 503, 503]
+    hook.run(transcript, env={"CLAUDE_CODE_USE_VERTEX": "true"})
+    path = hook.state_dir / "session-one.json"
+    kept = json.loads(path.read_text(encoding="utf-8"))
+    assert kept["pending"][0]["calls"][0]["provider"] == "gcp.vertex_ai"
+    del kept["pending"][0]["calls"][0]["provider"]
+    path.write_text(json.dumps(kept), encoding="utf-8")
+    hook.run(transcript)
+    (model,) = [s for s in hook.server.spans() if "gen_ai.request.model" in s["attrs"]]
+    assert model["attrs"]["gen_ai.provider.name"] == "anthropic"
+
+
 def test_the_next_hook_sends_only_what_is_new(hook, transcript):
     transcript.prompt()
     transcript.reply()

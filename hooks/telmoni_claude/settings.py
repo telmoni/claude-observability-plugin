@@ -8,6 +8,20 @@ from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_ENDPOINT = "https://api.telmoni.com"
+# Claude Code's switches for a cloud that serves the model, by the GenAI conventions' names.
+_SERVED_BY = (
+    ("CLAUDE_CODE_USE_BEDROCK", "aws.bedrock"),
+    ("CLAUDE_CODE_USE_VERTEX", "gcp.vertex_ai"),
+    ("CLAUDE_CODE_USE_FOUNDRY", "azure.ai.inference"),
+)
+
+
+def provider_of(env: Mapping[str, str]) -> str:
+    """Who serves the model, as the conventions and the price table name it."""
+    for name, provider in _SERVED_BY:
+        if (env.get(name) or "").strip().lower() in ("1", "true"):
+            return provider
+    return "anthropic"
 
 
 def option(name: str, env: Mapping[str, str]) -> str:
@@ -45,6 +59,7 @@ class Settings:
     api_key: str | None
     endpoint: str
     state_dir: Path
+    provider: str = "anthropic"
 
     @classmethod
     def read(cls, env: Mapping[str, str]) -> Settings:
@@ -52,4 +67,5 @@ class Settings:
             api_key=option("TELMONI_API_KEY", env) or None,
             endpoint=option("TELMONI_ENDPOINT", env) or DEFAULT_ENDPOINT,
             state_dir=state_dir(env),
+            provider=provider_of(env),
         )

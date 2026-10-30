@@ -173,7 +173,8 @@ def _call(telmoni: Any, call: dict[str, Any]) -> Any:
             model=call["model"],
             start=_when(call["start"]),
             end=_when(call["end"]),
-            provider="anthropic",
+            # A run kept by an older version names none: Anthropic's own was all it sent.
+            provider=call.get("provider", "anthropic"),
             usage=None
             if usage is None
             else telmoni.Usage(
