@@ -24,6 +24,8 @@ SECRETS = (
     "SUBAGENT-DESCRIPTION-NEVER-SENT",
     "COPIED-HISTORY-NEVER-SENT",
     "tm_test_key_never_sent",
+    "/data/models/NAME-PATH-NEVER-SENT",
+    "NAME-TEXT-NEVER-SENT",
 )
 KEY = "tm_test_key_never_sent"
 ENDPOINT = "http://localhost:1"

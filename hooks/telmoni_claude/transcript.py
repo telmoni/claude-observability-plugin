@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import names
+
 INTERRUPTED = "[Request interrupted by user"
 INTERRUPTED_TOOL = "[Request interrupted by user for tool use]"
 NOTIFICATION = "<task-notification>"
@@ -229,7 +231,7 @@ def message_id(row: Row) -> str | None:
 def model(row: Row) -> str | None:
     message = row.message
     value = message.get("model") if message else None
-    return value if isinstance(value, str) and value else None
+    return names.model(value) if isinstance(value, str) and value else None
 
 
 @dataclass(frozen=True)
@@ -301,14 +303,12 @@ def tool_uses(row: Row) -> list[ToolUse]:
         if not isinstance(tool_use_id, str) or not tool_use_id or not isinstance(name, str):
             continue
         given = block.get("input") if isinstance(block.get("input"), dict) else {}
-        skill = given.get("skill") if name == "Skill" else None
-        kind = given.get("subagent_type") if name in ("Agent", "Task") else None
         uses.append(
             ToolUse(
                 tool_use_id,
-                name,
-                skill if isinstance(skill, str) and skill else None,
-                kind if isinstance(kind, str) and kind else None,
+                names.tool(name),
+                names.kind(given.get("skill")) if name == "Skill" else None,
+                names.kind(given.get("subagent_type")) if name in ("Agent", "Task") else None,
                 name in ("Agent", "Task") and given.get("run_in_background") is True,
             )
         )
@@ -344,11 +344,10 @@ def discover_subagents(transcript_path: Path) -> dict[str, Subagent]:
         rows_path = meta_path.with_name(meta_path.name[: -len(".meta.json")] + ".jsonl")
         if not rows_path.exists():
             continue
-        agent_type = meta.get("agentType")
         finished = meta.get("finished")
         found[tool_use_id] = Subagent(
             tool_use_id,
-            agent_type if isinstance(agent_type, str) and agent_type else None,
+            names.kind(meta.get("agentType")),
             finished if isinstance(finished, bool) else None,
             rows_path,
         )

@@ -20,6 +20,8 @@ A transcript is JSON Lines. Of each row the plugin reads its kind, ids, time, co
 - the flags that mark Claude Code's own rows (`isMeta`, `isCompactSummary`, `turnCompanion`, `isSidechain`, `isApiErrorMessage`), the kind of a row's `origin` (the person, a task's notice, a peer), and the session a row belongs to;
 - of a user row's text, its first characters, for the markers Claude Code writes there (an interruption, a task's notice, a command's output, injected context) and the tool-use id a notice names; of an image, that there is one. Nothing of that text is kept.
 
+Names are kept as plain names within ingest's caps (`names.py`): a model named by a path goes as its weights file's name, or `unknown`, and is cut to 128 characters; a tool's name, a skill's or a subagent's kind holding anything but a plain name, as a model may write, goes as `unknown`, or not at all.
+
 A subagent's transcript, in the session's folder under `subagents/`, is read the same way; its `.meta.json` names the tool call that started it, its kind and whether it has finished.
 
 ## How turns are cut

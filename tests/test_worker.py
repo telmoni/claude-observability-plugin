@@ -37,6 +37,35 @@ def test_a_turn_is_sent_as_a_run(hook, transcript):
     assert_metadata_only(*hook.server.bodies, hook.kept())
 
 
+def test_names_a_model_wrote_leave_as_plain_names_and_a_long_one_loses_nothing(hook, transcript):
+    transcript.prompt()
+    transcript.reply(
+        model="/data/models/NAME-PATH-NEVER-SENT/qwen-30b",
+        tool_uses=(
+            ("tu1", "run NAME-TEXT-NEVER-SENT now", {}),
+            ("tu2", "Skill", {"skill": "NAME-TEXT-NEVER-SENT /secret/path"}),
+            ("tu3", "Task", {"subagent_type": "NAME-TEXT-NEVER-SENT kind"}),
+        ),
+    )
+    transcript.result("tu1")
+    transcript.result("tu2")
+    transcript.subagent("tu3", agent_type="NAME-TEXT-NEVER-SENT kind")
+    transcript.result("tu3")
+    transcript.reply(message_id="msg_2", model="x" * 300)
+    assert hook.run(transcript) == 0
+    (run,) = hook.server.runs()
+    assert "skills" not in json.dumps(run["attrs"])
+    models = sorted(
+        s["attrs"]["gen_ai.request.model"]
+        for s in hook.server.spans()
+        if "gen_ai.request.model" in s["attrs"]
+    )
+    assert "unknown" in models and "x" * 128 in models
+    assert hook.server.by_attr("gen_ai.tool.name", "unknown")
+    assert "refused" not in hook.log()
+    assert_metadata_only(*hook.server.bodies, hook.kept(), hook.log())
+
+
 def test_the_next_hook_sends_only_what_is_new(hook, transcript):
     transcript.prompt()
     transcript.reply()

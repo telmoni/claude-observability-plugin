@@ -113,6 +113,37 @@ def test_tool_uses_keep_a_name_a_skill_and_a_subagents_kind(transcript):
     assert "secret" not in json.dumps([u.__dict__ for u in uses])
 
 
+def test_names_are_plain_names_within_ingests_caps(transcript):
+    transcript.reply(model="/data/models/NAME-PATH-NEVER-SENT/qwen-30b")
+    transcript.reply(message_id="b", model="/models/NAME-PATH-NEVER-SENT/qwen3-coder.gguf")
+    transcript.reply(message_id="c", model="  anthropic/claude-opus-5-5 ")
+    transcript.reply(message_id="d", model="m" * 200)
+    transcript.reply(
+        message_id="e",
+        tool_uses=(
+            ("tu1", "read the file at NAME-TEXT-NEVER-SENT", {}),
+            ("tu2", "Skill", {"skill": "NAME-TEXT-NEVER-SENT and more"}),
+            ("tu3", "Agent", {"subagent_type": "/data/models/NAME-PATH-NEVER-SENT"}),
+            ("tu4", "mcp__github__create_issue", {}),
+        ),
+    )
+    found = rows(transcript)
+    assert [t.model(row) for row in found] == [
+        "unknown",
+        "qwen3-coder.gguf",
+        "anthropic/claude-opus-5-5",
+        "m" * 128,
+        "claude-opus-5-5",
+    ]
+    uses = t.tool_uses(found[-1])
+    assert [(u.name, u.skill, u.subagent_type) for u in uses] == [
+        ("unknown", None, None),
+        ("Skill", None, None),
+        ("Agent", None, None),
+        ("mcp__github__create_issue", None, None),
+    ]
+
+
 def test_subagents_are_found_by_the_tool_call_that_started_them(transcript):
     transcript.subagent("tu1", agent_id="one", agent_type="Explore", finished=True)
     transcript.subagent("tu2", agent_id="two", agent_type="Plan", finished=None)

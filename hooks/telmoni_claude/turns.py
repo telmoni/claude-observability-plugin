@@ -77,7 +77,7 @@ class Turn:
         key = t.message_id(row) or f"row:{row.offset}"
         call = self._models.get(key)
         if call is None:
-            call = ModelCall(t.model(row) or "claude", last, when, t.usage(row))
+            call = ModelCall(t.model(row) or "unknown", last, when, t.usage(row))
             self._models[key] = call
             self.model_calls.append(call)
         else:
