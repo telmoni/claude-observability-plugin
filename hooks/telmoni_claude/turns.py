@@ -46,6 +46,10 @@ class Turn:
     model_calls: list[ModelCall] = field(default_factory=list)
     tool_calls: list[ToolCall] = field(default_factory=list)
     ended_by_interruption: bool = False
+    # Begun by a `Stop` hook that blocked, not by a prompt.
+    continued: bool = False
+    # Whether the last reply ended the model's turn.
+    replied_last: bool = False
     open: bool = True
     next_offset: int = 0
     _models: dict[str, ModelCall] = field(default_factory=dict, repr=False)
@@ -105,6 +109,7 @@ class Turn:
             self.tool_calls.append(tool)
         self._answered = []
         self._replied = True
+        self.replied_last = t.ended_turn(row)
         self.ended_by_interruption = False
         self._later(when)
 
@@ -141,13 +146,16 @@ def assemble(rows: list[Row], session_id: str, end: int) -> list[Turn]:
     for row in rows:
         if row.session_id and row.session_id != session_id:
             continue
-        if t.is_prompt(row):
+        # A `Stop` hook that blocked carries the turn on with no prompt: a run of its own.
+        continued = t.stop_blocked(row)
+        if continued or t.is_prompt(row):
             if current is not None:
                 current.open = False
                 current.next_offset = row.offset
                 turns.append(current)
             when = row.timestamp or last
             current = Turn(row.offset, row.uuid or f"offset:{row.offset}", when, when, row.version)
+            current.continued = continued
             last = when
             continue
         if current is not None:
@@ -197,6 +205,11 @@ def is_complete(turn: Turn, event: str, busy: bool, subagents: dict[str, Subagen
         known = subagents.get(tool.tool_use_id)
         if known is not None and known.finished is False:
             return False
+    # The hook that blocked can return inside the worker's wait, so the run it began is read
+    # under way at the very Stop it followed.
+    ended = turn.replied_last or turn.ended_by_interruption
+    if event == "Stop" and turn.open and turn.continued and not ended:
+        return False
     return not (turn.open and busy)
 
 

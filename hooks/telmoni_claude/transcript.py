@@ -222,6 +222,23 @@ def async_agent(row: Row) -> str | None:
     return agent_id if isinstance(agent_id, str) else ""
 
 
+def stop_blocked(row: Row) -> bool:
+    """Claude Code's mark that a `Stop` hook blocked, so the turn goes on with no prompt."""
+    attachment = row.data.get("attachment") if row.type == "attachment" else None
+    return (
+        isinstance(attachment, dict)
+        and attachment.get("type") == "hook_blocking_error"
+        and attachment.get("hookEvent") == "Stop"
+    )
+
+
+def ended_turn(row: Row) -> bool:
+    """Whether a reply is the model's last of its turn, not one that waits on a tool."""
+    message = row.message
+    reason = message.get("stop_reason") if message else None
+    return isinstance(reason, str) and reason not in ("tool_use", "pause_turn")
+
+
 def message_id(row: Row) -> str | None:
     message = row.message
     value = message.get("id") if message else None

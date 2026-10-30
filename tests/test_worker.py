@@ -113,6 +113,42 @@ def test_the_next_hook_sends_only_what_is_new(hook, transcript):
     assert len(hook.state("session-one")["sent"]) == 2
 
 
+def test_the_work_a_blocking_stop_hook_carries_on_is_a_run_of_its_own(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    hook.run(transcript)
+    transcript.stop_blocked()
+    transcript.reply(message_id="msg_2", tool_uses=(("tu1", "Bash", {}),))
+    transcript.result("tu1")
+    transcript.reply(message_id="msg_3")
+    hook.run(transcript)
+    first, carried = hook.server.runs()
+    assert first["attrs"]["telmoni.run_id"] != carried["attrs"]["telmoni.run_id"]
+    assert hook.server.by_attr("gen_ai.tool.name", "Bash")
+    models = [s for s in hook.server.spans() if "gen_ai.request.model" in s["attrs"]]
+    assert len(models) == 3
+    assert hook.state("session-one")["offset"] == transcript.path.stat().st_size
+    assert_metadata_only(*hook.server.bodies, hook.kept(), hook.log())
+
+
+def test_carried_on_work_read_under_way_waits_for_its_own_stop(hook, transcript):
+    transcript.prompt()
+    transcript.reply()
+    # The blocking hook returned before this plugin's worker read the transcript.
+    transcript.stop_blocked()
+    transcript.reply(message_id="msg_2", tool_uses=(("tu1", "Bash", {}),))
+    hook.run(transcript)
+    assert len(hook.server.runs()) == 1
+    transcript.result("tu1")
+    transcript.reply(message_id="msg_3")
+    hook.run(transcript)
+    _, carried = hook.server.runs()
+    models = [s for s in hook.server.spans() if "gen_ai.request.model" in s["attrs"]]
+    assert len(models) == 3
+    assert hook.server.by_attr("gen_ai.tool.name", "Bash")[0]["attrs"].get("error.type") is None
+    assert carried["attrs"]["telmoni.run_id"] in hook.state("session-one")["sent"]
+
+
 def test_an_interrupted_turn_is_a_cancelled_run(hook, transcript):
     transcript.prompt()
     transcript.reply(tool_uses=(("tu1", "Bash", {}),))

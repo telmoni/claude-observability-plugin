@@ -179,6 +179,35 @@ class Transcript:
             "user", {"role": "user", "content": "go on"}, turnCompanion=True, isMeta=True
         )
 
+    def stop_blocked(self) -> dict[str, Any]:
+        """A `Stop` hook that blocked, as Claude Code 2.1.312 wrote it: its reason as a meta
+        row, the block as an attachment, then the hooks' summary; the turn then goes on."""
+        reason = "PROMPT-TEXT-NEVER-SENT"
+        self.tick(0.1)
+        self.row("user", {"role": "user", "content": f"Stop hook feedback:\n{reason}"}, isMeta=True)
+        block = self.row(
+            "attachment",
+            attachment={
+                "type": "hook_blocking_error",
+                "hookName": "Stop",
+                "toolUseID": "hook-1",
+                "hookEvent": "Stop",
+                "blockingError": {"blockingError": reason, "command": "/secret/path"},
+            },
+            renderedRole="system",
+        )
+        self.row(
+            "system",
+            subtype="stop_hook_summary",
+            hookCount=1,
+            hookInfos=[{"command": "/secret/path"}],
+            hookErrors=[reason],
+            preventedContinuation=False,
+            stopReason="",
+            level="suggestion",
+        )
+        return block
+
     def other_session(self) -> dict[str, Any]:
         self.tick()
         return self.row(
