@@ -66,6 +66,8 @@ jobs:
           enable-cache: true
       # An empty payload is not a turn: the hook must return 0 and start nothing.
       - run: echo '{}' | uv run --script hooks/telmoni_hook.py
+      # The worker's header resolves the SDK, and the worker returns 0 on a payload it cannot use.
+      - run: echo '{}' | uv run --script hooks/telmoni_worker.py
 
   manifests:
     name: The manifests as Claude Code reads them

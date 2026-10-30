@@ -17,10 +17,12 @@ _WEIGHTS = re.compile(r"[/\\]([^/\\]+\.(?:gguf|ggml|bin|safetensors|llamafile))$
 def model(value: str) -> str:
     """A model's name cut to ingest's cap; a model file's own name for its path, else `unknown`."""
     name = value.strip()
+    if not name or _CONTROL.search(name):
+        return "unknown"
     weights = _WEIGHTS.search(name)
     if weights:
         return weights.group(1)[:MODEL_MAX]
-    if not name or _CONTROL.search(name) or _PATH.match(name):
+    if _PATH.match(name):
         return "unknown"
     return name[:MODEL_MAX]
 

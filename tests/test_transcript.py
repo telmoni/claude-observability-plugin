@@ -118,6 +118,7 @@ def test_names_are_plain_names_within_ingests_caps(transcript):
     transcript.reply(message_id="b", model="/models/NAME-PATH-NEVER-SENT/qwen3-coder.gguf")
     transcript.reply(message_id="c", model="  anthropic/claude-opus-5-5 ")
     transcript.reply(message_id="d", model="m" * 200)
+    transcript.reply(message_id="d2", model="/models/x\nNAME-TEXT-NEVER-SENT.gguf")
     transcript.reply(
         message_id="e",
         tool_uses=(
@@ -134,6 +135,7 @@ def test_names_are_plain_names_within_ingests_caps(transcript):
         "qwen3-coder.gguf",
         "anthropic/claude-opus-5-5",
         "m" * 128,
+        "unknown",
         "claude-opus-5-5",
     ]
     uses = t.tool_uses(found[-1])

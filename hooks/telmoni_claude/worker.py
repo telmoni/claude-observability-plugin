@@ -87,6 +87,7 @@ def _run(
         subagents = transcript.discover_subagents(path)
         found = turns.assemble(read.rows, session, read.end)
         sender = Sender(settings, log, session, event, transport, sleep)
+        state.destination = settings.destination()
         saver = _Saver(state, state_path)
         try:
             _deliver(state, found, sender, given, subagents, log, saver)
@@ -97,19 +98,29 @@ def _run(
         lock.release()
     if reached:
         _send_left(settings, log, session, event, transport, sleep)
-    _sweep_locks(settings)
+    _sweep_locks(settings, session)
 
 
-def _sweep_locks(settings: Settings) -> None:
-    """Lock files of sessions gone quiet; a state stays, since read as missing it would send
-    a resumed session from its start, and it keeps no transcript's path to judge it by."""
+def _sweep_locks(settings: Settings, own: str) -> None:
+    """Lock files of other sessions gone quiet, judged by their state's last save; a state stays,
+    since read as missing it would send a resumed session from its start, and it keeps no
+    transcript's path to judge it by."""
     now = time.time()
     for path in settings.state_dir.glob("*.lock"):
-        if now - _mtime(path) <= SWEEP_AFTER_S:
+        if path.stem == own:
+            continue
+        last = max(_mtime(path), _mtime(path.with_suffix(".json")))
+        if now - last <= SWEEP_AFTER_S:
             continue
         lock = Lock(path)
-        if lock.acquire(0):
-            path.unlink(missing_ok=True)  # held, then gone: no hook waits on a deleted file
+        if not lock.acquire(0):
+            continue
+        try:
+            # Unlinked while held: a hook that locks the old file after sees it gone, and retries.
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass  # Windows deletes no file held open
+        finally:
             lock.release()
 
 
@@ -121,7 +132,9 @@ def _send_left(
     transport: Callable[..., Any] | None,
     sleep: Callable[[float], None] | None,
 ) -> None:
-    """Other sessions' kept runs, oldest first: their last hook may have met no Telmoni."""
+    """Other sessions' kept runs, the longest waiting first, each where its own session's key
+    sends alone: their last hook may have met no Telmoni."""
+    destination = settings.destination()
     markers = sorted(settings.state_dir.glob("*.pending"), key=_mtime)
     for marker in markers:
         session = marker.stem
@@ -135,6 +148,9 @@ def _send_left(
             try:
                 state = State.load(path)
             except (OSError, ValueError):
+                continue
+            # Another key, or another endpoint: that session's own next hook sends them.
+            if state.destination != destination:
                 continue
             sender = Sender(settings, log, session, event, transport, sleep)
             saver = _Saver(state, path)

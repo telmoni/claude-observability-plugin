@@ -22,8 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from telmoni_claude import payload as hook_payload  # noqa: E402
 from telmoni_claude import settings, worker  # noqa: E402
 
-# Windows has no session to start the worker in: these flags detach it instead.
-DETACHED_PROCESS = 0x00000008
+# Windows has no session to start the worker in: these flags part it from the hook's console
+# instead, giving it a hidden one, which uv's own Python inherits, so no window opens.
+CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
@@ -43,7 +44,7 @@ def main(argv: list[str]) -> int:
 
 def _start(payload: dict[str, Any]) -> None:
     detached: dict[str, Any] = (
-        {"creationflags": DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP}
+        {"creationflags": CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP}
         if sys.platform == "win32"
         else {"start_new_session": True}
     )

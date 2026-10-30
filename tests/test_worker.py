@@ -139,16 +139,37 @@ def test_a_reply_the_person_cut_short_is_a_cancelled_call(hook, transcript):
 
 
 def test_a_quiet_sessions_lock_is_swept_and_a_recent_one_kept(hook, transcript):
+    week = time.time() - worker.SWEEP_AFTER_S - 60
     old = hook.state_dir / "gone.lock"
     old.touch()
-    week = time.time() - worker.SWEEP_AFTER_S - 60
     os.utime(old, (week, week))
+    # A lock made long ago whose session saved its state lately is no quiet session's.
+    saved = hook.state_dir / "saved.lock"
+    saved.touch()
+    os.utime(saved, (week, week))
+    (hook.state_dir / "saved.json").write_text("{}", encoding="utf-8")
     recent = hook.state_dir / "recent.lock"
     recent.touch()
     transcript.prompt()
     transcript.reply()
+    own = hook.state_dir / "session-one.lock"
+    own.touch()
+    os.utime(own, (week, week))
     hook.run(transcript)
-    assert not old.exists() and recent.exists()
+    assert not old.exists() and saved.exists() and recent.exists() and own.exists()
+
+
+def test_a_hook_that_waited_on_a_swept_lock_takes_the_one_at_the_path(tmp_path):
+    path = tmp_path / "s.lock"
+    first = state.Lock(path)
+    assert first.acquire(0)
+    path.unlink()
+    second = state.Lock(path)
+    # The old file is unlinked: the second takes a new one, which a third then cannot.
+    assert second.acquire(0)
+    assert not state.Lock(path).acquire(0)
+    first.release()
+    second.release()
 
 
 def test_a_denied_tool_followed_by_a_reply_is_not_a_cancelled_run(hook, transcript):
@@ -351,6 +372,21 @@ def test_a_run_left_at_a_sessions_end_goes_with_another_sessions_hook(hook, tran
     assert not (hook.state_dir / "session-one.pending").exists()
 
 
+def test_a_left_run_goes_only_where_its_own_sessions_key_sends(hook, transcript, tmp_path):
+    transcript.prompt()
+    transcript.reply()
+    hook.server.answers = [503, 503, 503]
+    hook.run(transcript, event="SessionEnd")
+    other = Transcript(tmp_path / "projects" / "p" / "session-two.jsonl", "session-two")
+    other.prompt()
+    other.reply()
+    # Another endpoint beside the same key: the left run is that session's own next hook's.
+    hook.run(other, env={"CLAUDE_PLUGIN_OPTION_TELMONI_ENDPOINT": "http://127.0.0.1:1"})
+    assert len(hook.server.runs()) == 1
+    assert len(hook.state("session-one")["pending"]) == 1
+    assert (hook.state_dir / "session-one.pending").exists()
+
+
 def test_a_left_run_waits_while_telmoni_is_away(hook, transcript, tmp_path):
     transcript.prompt()
     transcript.reply()
@@ -512,7 +548,7 @@ def test_with_uv_the_worker_fetches_the_sdk_itself(monkeypatch, tmp_path):
 def test_on_windows_the_worker_is_detached_by_its_creation_flags(monkeypatch, tmp_path):
     started, _ = start_hook(monkeypatch, tmp_path, platform="win32")
     flags = started["options"]["creationflags"]
-    assert flags & telmoni_hook.DETACHED_PROCESS and flags & telmoni_hook.CREATE_NEW_PROCESS_GROUP
+    assert flags & telmoni_hook.CREATE_NO_WINDOW and flags & telmoni_hook.CREATE_NEW_PROCESS_GROUP
     assert "start_new_session" not in started["options"]
 
 

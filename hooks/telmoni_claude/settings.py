@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -55,6 +56,12 @@ class Settings:
     endpoint: str
     state_dir: Path
     provider: str = "anthropic"
+
+    def destination(self) -> str:
+        """Where this key sends, as a digest of the endpoint and the key: what a session's kept runs
+        are held to, so another session's hook sends them nowhere they were not meant to go."""
+        named = f"{self.endpoint}\n{self.api_key or ''}".encode()
+        return hashlib.sha256(named).hexdigest()[:16]
 
     @classmethod
     def read(cls, env: Mapping[str, str]) -> Settings:

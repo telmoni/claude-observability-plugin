@@ -29,6 +29,8 @@ class State:
     # Turns Telmoni could not take yet, in order, sent again before any new one.
     pending: list[dict[str, Any]] = field(default_factory=list)
     warned: dict[str, bool] = field(default_factory=dict)
+    # Where the session's key sends (`Settings.destination`): its kept runs go there alone.
+    destination: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> State:
@@ -53,6 +55,9 @@ class State:
         warned = data.get("warned")
         if isinstance(warned, dict):
             state.warned = {key: True for key, value in warned.items() if value is True}
+        destination = data.get("destination")
+        if isinstance(destination, str):
+            state.destination = destination
         return state
 
     def save(self, path: Path) -> None:
@@ -97,14 +102,19 @@ class Lock:
         """Takes the lock, waiting up to `wait` seconds for its holder, or without
         limit when `wait` is None."""
         deadline = None if wait is None else time.monotonic() + wait
-        fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
-        while not _lock(fd):
-            if deadline is not None and time.monotonic() >= deadline:
-                os.close(fd)
-                return False
-            time.sleep(poll)
-        self._fd = fd
-        return True
+        while True:
+            fd = os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600)
+            while not _lock(fd):
+                if deadline is not None and time.monotonic() >= deadline:
+                    os.close(fd)
+                    return False
+                time.sleep(poll)
+            if _linked(fd, self.path):
+                self._fd = fd
+                return True
+            # Swept while this hook waited on it: the lock is the file at the path now.
+            _unlock(fd)
+            os.close(fd)
 
     def release(self) -> None:
         fd, self._fd = self._fd, None
@@ -113,6 +123,16 @@ class Lock:
         # The file stays: removed, a third hook would lock a new one beside a second's.
         _unlock(fd)
         os.close(fd)
+
+
+def _linked(fd: int, path: Path) -> bool:
+    """Whether the file locked is still the one at `path`, which a sweep may have unlinked."""
+    if fcntl is None:
+        return True  # Windows deletes no file held open, so none is swept under a holder
+    try:
+        return os.fstat(fd).st_ino == os.stat(path).st_ino
+    except OSError:
+        return False
 
 
 def _lock(fd: int) -> bool:
