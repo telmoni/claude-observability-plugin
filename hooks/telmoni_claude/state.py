@@ -65,6 +65,12 @@ class State:
             f.flush()
             os.fsync(f.fileno())
         os.replace(temporary, path)
+        # Beside a state still holding runs, so any session's hook finds what is left to send.
+        marker = path.with_suffix(".pending")
+        if self.pending:
+            marker.touch(mode=0o600)
+        else:
+            marker.unlink(missing_ok=True)
 
     def mark_sent(self, run_id: str) -> None:
         if run_id not in self.sent:

@@ -12,7 +12,7 @@ import telmoni_hook
 from telmoni_claude import __version__, record, state
 from telmoni_claude.send import Sender
 
-from .conftest import KEY, assert_metadata_only
+from .conftest import KEY, Transcript, assert_metadata_only
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -275,6 +275,39 @@ def test_the_state_is_the_owners_alone(hook, transcript):
     hook.run(transcript)
     assert (hook.state_dir / "session-one.json").stat().st_mode & 0o777 == 0o600
     assert not list(hook.state_dir.glob("*.tmp"))
+
+
+def test_a_run_left_at_a_sessions_end_goes_with_another_sessions_hook(hook, transcript, tmp_path):
+    transcript.prompt()
+    transcript.reply()
+    hook.server.answers = [503, 503, 503]
+    hook.run(transcript, event="SessionEnd")
+    assert (hook.state_dir / "session-one.pending").exists()
+    left = hook.state("session-one")["pending"][0]["run_id"]
+    other = Transcript(tmp_path / "projects" / "p" / "session-two.jsonl", "session-two")
+    other.prompt()
+    other.reply()
+    hook.run(other)
+    runs = [run["attrs"]["telmoni.run_id"] for run in hook.server.runs()]
+    assert len(runs) == 2 and runs[-1] == left
+    assert hook.state("session-one")["pending"] == []
+    assert left in hook.state("session-one")["sent"]
+    assert not (hook.state_dir / "session-one.pending").exists()
+
+
+def test_a_left_run_waits_while_telmoni_is_away(hook, transcript, tmp_path):
+    transcript.prompt()
+    transcript.reply()
+    hook.server.answers = [503, 503, 503]
+    hook.run(transcript, event="SessionEnd")
+    other = Transcript(tmp_path / "projects" / "p" / "session-two.jsonl", "session-two")
+    other.prompt()
+    other.reply()
+    hook.server.answers = [200, 503, 503, 503]
+    hook.run(other)
+    assert len(hook.server.runs()) == 1
+    assert len(hook.state("session-one")["pending"]) == 1
+    assert (hook.state_dir / "session-one.pending").exists()
 
 
 def test_a_refusal_is_final(hook, transcript):

@@ -90,8 +90,53 @@ def _run(
             _deliver(state, found, sender, given, subagents, log, saver)
         finally:
             saver.save()
+        reached = not state.pending
     finally:
         lock.release()
+    if reached:
+        _send_left(settings, log, session, event, transport, sleep)
+
+
+def _send_left(
+    settings: Settings,
+    log: Log,
+    own: str,
+    event: str,
+    transport: Callable[..., Any] | None,
+    sleep: Callable[[float], None] | None,
+) -> None:
+    """Other sessions' kept runs, oldest first: their last hook may have met no Telmoni."""
+    markers = sorted(settings.state_dir.glob("*.pending"), key=_mtime)
+    for marker in markers:
+        session = marker.stem
+        if session == own:
+            continue
+        lock = Lock(settings.state_dir / f"{session}.lock")
+        if not lock.acquire(0):
+            continue
+        try:
+            path = settings.state_dir / f"{session}.json"
+            try:
+                state = State.load(path)
+            except (OSError, ValueError):
+                continue
+            sender = Sender(settings, log, session, event, transport, sleep)
+            saver = _Saver(state, path)
+            try:
+                emptied = _send_pending(state, sender, log, session, event, saver)
+            finally:
+                saver.save()
+        finally:
+            lock.release()
+        if not emptied:
+            return  # Telmoni is away again: the next hook of any session tries again
+
+
+def _mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 class _Saver:
@@ -122,15 +167,7 @@ def _deliver(
 ) -> None:
     session, event = given.session_id, given.event
     # What Telmoni could not take before goes first, and holds what follows.
-    while state.pending:
-        verdict = sender.send(state.pending[0], state.warned)
-        _note(log, session, event, state.pending[0], verdict)
-        if verdict.outcome is Outcome.UNDELIVERED:
-            break
-        gone = state.pending.pop(0).get("run_id")
-        if isinstance(gone, str):
-            state.mark_sent(gone)
-        saved()
+    _send_pending(state, sender, log, session, event, saved)
     for turn in found:
         run_id = records.run_id(session, turn.prompt_uuid)
         if run_id in state.sent:
@@ -160,6 +197,22 @@ def _deliver(
             event,
             f"dropped {dropped} runs Telmoni could not take, the newest {states.PENDING_KEPT} kept",
         )
+
+
+def _send_pending(
+    state: State, sender: Sender, log: Log, session: str, event: str, saved: Callable[[], None]
+) -> bool:
+    """The kept runs, in order, until one is still not delivered; whether none is left."""
+    while state.pending:
+        verdict = sender.send(state.pending[0], state.warned)
+        _note(log, session, event, state.pending[0], verdict)
+        if verdict.outcome is Outcome.UNDELIVERED:
+            return False
+        gone = state.pending.pop(0).get("run_id")
+        if isinstance(gone, str):
+            state.mark_sent(gone)
+        saved()
+    return True
 
 
 def _read_subagent(known: transcript.Subagent) -> list[transcript.Row]:
