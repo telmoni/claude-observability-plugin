@@ -6,7 +6,8 @@ from __future__ import annotations
 import re
 
 MODEL_MAX = 128
-_PLAIN_TOOL = re.compile(r"[\w.:@+-]{1,145}", re.ASCII)
+TOOL_MAX = 145
+_PLAIN_TOOL = re.compile(r"[\w.:@+-]+", re.ASCII)
 _PLAIN_KIND = re.compile(r"[\w.:-]{1,64}", re.ASCII)
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _PATH = re.compile(r"[/\\]|~(?:[/\\]|$)|\.{1,2}[/\\]|[A-Za-z]:[/\\]|file:", re.IGNORECASE)
@@ -25,8 +26,9 @@ def model(value: str) -> str:
 
 
 def tool(value: str) -> str:
-    """A tool's name as every provider's tools are named; the model writes it, so else `unknown`."""
-    return value if _PLAIN_TOOL.fullmatch(value) else "unknown"
+    """A tool's name as every provider's tools are named, cut to ingest's cap; the model writes
+    it, so anything else is `unknown`."""
+    return value[:TOOL_MAX] if _PLAIN_TOOL.fullmatch(value) else "unknown"
 
 
 def kind(value: object) -> str | None:

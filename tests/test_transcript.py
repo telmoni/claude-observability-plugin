@@ -125,6 +125,7 @@ def test_names_are_plain_names_within_ingests_caps(transcript):
             ("tu2", "Skill", {"skill": "NAME-TEXT-NEVER-SENT and more"}),
             ("tu3", "Agent", {"subagent_type": "/data/models/NAME-PATH-NEVER-SENT"}),
             ("tu4", "mcp__github__create_issue", {}),
+            ("tu5", "mcp__" + "s" * 150 + "__search", {}),
         ),
     )
     found = rows(transcript)
@@ -141,6 +142,7 @@ def test_names_are_plain_names_within_ingests_caps(transcript):
         ("Skill", None, None),
         ("Agent", None, None),
         ("mcp__github__create_issue", None, None),
+        (("mcp__" + "s" * 150)[:145], None, None),
     ]
 
 
