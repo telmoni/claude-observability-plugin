@@ -7,6 +7,7 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 - **Never read, print or copy a `.env`, Claude Code's credentials (`~/.claude/.credentials.json`) or a key.** A test, a fixture or a commit never holds a real key.
 - **Ask first:** any dependency change (the script's header, `pyproject.toml`, `uv.lock`) and any external-state change (a listing in a directory, a call to a live Telmoni with a real key).
 - **Quality gate:** never weaken a test or leave the tree broken.
+- **Build only what is asked:** the smallest change that does the task, in the files that already hold it. No feature, option, abstraction, layer, helper or file for a need that is not here yet, and no refactor beyond the task (a split, a rename, a rewrite for style): propose it with what it costs, and wait. A new repository, package, service or workflow is the owner's to make.
 - **The hook never fails the session**: every fault is a log line and exit code 0.
 
 ## Where Things Live
