@@ -305,6 +305,7 @@ def test_the_state_is_the_owners_alone(hook, transcript):
     transcript.reply()
     hook.run(transcript)
     assert (hook.state_dir / "session-one.json").stat().st_mode & 0o777 == 0o600
+    assert (hook.state_dir / "hook.log").stat().st_mode & 0o777 == 0o600
     assert not list(hook.state_dir.glob("*.tmp"))
 
 

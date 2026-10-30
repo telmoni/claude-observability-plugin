@@ -24,13 +24,6 @@ def provider_of(env: Mapping[str, str]) -> str:
     return "anthropic"
 
 
-def option(name: str, env: Mapping[str, str]) -> str:
-    """A setting: the environment's first, since a repository's `.claude/settings.json` points one
-    checkout at another project where the plugin's own setting is machine-wide; then its own."""
-    given = (env.get(name) or "").strip()
-    return given or (env.get(f"CLAUDE_PLUGIN_OPTION_{name}") or "").strip()
-
-
 def state_dir(env: Mapping[str, str]) -> Path:
     """Where the state, the locks and the log live: the folder Claude Code keeps for the
     plugin across its updates, else `telmoni` under its config folder."""
@@ -39,7 +32,9 @@ def state_dir(env: Mapping[str, str]) -> Path:
         made = _usable(Path(data))
         if made is not None:
             return made
-    home = Path(env.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    # A relative one would put the state under the session's working folder.
+    given = env.get("CLAUDE_CONFIG_DIR")
+    home = Path(given) if given and Path(given).is_absolute() else Path.home() / ".claude"
     made = _usable(home / "telmoni")
     if made is None:
         raise OSError(f"no writable state folder under {home}")
@@ -48,7 +43,7 @@ def state_dir(env: Mapping[str, str]) -> Path:
 
 def _usable(path: Path) -> Path | None:
     try:
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
     except OSError:
         return None
     return path if os.access(path, os.W_OK | os.X_OK) else None
@@ -63,9 +58,15 @@ class Settings:
 
     @classmethod
     def read(cls, env: Mapping[str, str]) -> Settings:
+        """The environment's key first, since a repository's `.claude/settings.json` points one
+        checkout at another project, else the plugin's own; each with the endpoint beside it,
+        so a key never goes to an endpoint named somewhere else."""
+        prefix = "" if (env.get("TELMONI_API_KEY") or "").strip() else "CLAUDE_PLUGIN_OPTION_"
+        key = (env.get(f"{prefix}TELMONI_API_KEY") or "").strip()
+        endpoint = (env.get(f"{prefix}TELMONI_ENDPOINT") or "").strip()
         return cls(
-            api_key=option("TELMONI_API_KEY", env) or None,
-            endpoint=option("TELMONI_ENDPOINT", env) or DEFAULT_ENDPOINT,
+            api_key=key or None,
+            endpoint=endpoint or DEFAULT_ENDPOINT,
             state_dir=state_dir(env),
             provider=provider_of(env),
         )

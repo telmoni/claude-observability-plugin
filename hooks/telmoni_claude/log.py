@@ -3,6 +3,7 @@ never anything said in it."""
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,7 +19,8 @@ class Log:
         try:
             if self.path.exists() and self.path.stat().st_size > LIMIT:
                 self.path.replace(self.path.with_suffix(".log.1"))
-            with self.path.open("a", encoding="utf-8") as f:
+            fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
                 f.write(f"{stamp} {session[:8]} {event} {text}\n")
         except OSError:
             pass

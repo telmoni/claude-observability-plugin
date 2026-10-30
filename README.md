@@ -30,7 +30,7 @@ The plugin asks for a [project API key](https://telmoni.com/docs/api/api-keys) h
 echo '{"TELMONI_API_KEY": "tm_…"}' | claude plugin configure telmoni-observability@telmoni-plugins --values-stdin
 ```
 
-Claude Code keeps the key with its own credentials: in the Keychain on macOS, and in its credentials file elsewhere. The endpoint is `https://api.telmoni.com` unless you set one; a self-hosted Telmoni gives its machine host. `TELMONI_API_KEY` and `TELMONI_ENDPOINT` in the environment Claude Code starts in — your shell's, or a repository's `.claude/settings.json` `env` block — come before the plugin's own settings, so one checkout can report to another project.
+Claude Code keeps the key with its own credentials: in the Keychain on macOS, and in its credentials file elsewhere. The endpoint is `https://api.telmoni.com` unless you set one; a self-hosted Telmoni gives its machine host. A `TELMONI_API_KEY` in the environment Claude Code starts in — your shell's, or a repository's `.claude/settings.json` `env` block — comes before the plugin's own settings, so one checkout can report to another project, and goes with the `TELMONI_ENDPOINT` beside it there, or the default: a key is never sent to an endpoint named somewhere else, so a repository that names its own endpoint gets no one's machine-wide key.
 
 ## What a turn records
 

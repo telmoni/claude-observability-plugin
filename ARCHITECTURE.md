@@ -6,7 +6,7 @@ The Claude Code plugin for Telmoni: a hook that records each turn of a person's 
 
 Claude Code runs `hooks/telmoni_hook.py` at `Stop`, `StopFailure` and `SessionEnd`, through `uv run --script` or, without uv, `python3`. The script reads the event from stdin and keeps only what names the work: the session id, the transcript's path, the event, an API error's kind, and whether a background task (a subagent, a workflow, a teammate) still runs. It starts a worker, the same script with `--work`, in a session of its own, handing it the event over stdin, its errors going to the log, and returns at once: a turn never waits on Telmoni, and a session's end loses nothing. The hook's command exits 0 whatever uv or python3 return, since a `Stop` hook's exit 2 would send Claude back to work, and uv's first fetch of the SDK fails without a network.
 
-The worker reads the settings and, without a key, logs that once and stops. Otherwise it takes a lock on the session, waits for the transcript to stop growing, reads the rows written since the last hook, sends each turn that has ended, and remembers the rest.
+The worker reads the settings, the environment's key with the environment's endpoint or else the plugin's own pair, never one place's key with another's endpoint, and, without a key, logs that once and stops. Otherwise it takes a lock on the session, waits for the transcript to stop growing, reads the rows written since the last hook, sends each turn that has ended, and remembers the rest.
 
 Cursor runs Claude Code's hooks too; it names itself in the environment and in its payload, and the hook does nothing there, Cursor's own plugin recording those conversations.
 

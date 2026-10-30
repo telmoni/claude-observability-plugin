@@ -1,13 +1,19 @@
 from telmoni_claude import settings
 
 
-def test_the_environment_comes_before_the_plugins_own_setting():
-    both = {"TELMONI_API_KEY": "from-env", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
-    assert settings.option("TELMONI_API_KEY", both) == "from-env"
-    own = {"CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
-    assert settings.option("TELMONI_API_KEY", own) == "from-plugin"
-    blank = {"TELMONI_API_KEY": "  ", "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin"}
-    assert settings.option("TELMONI_API_KEY", blank) == "from-plugin"
+def test_a_key_goes_only_with_the_endpoint_named_beside_it(tmp_path):
+    base = {"CLAUDE_CONFIG_DIR": str(tmp_path)}
+    plugin = {
+        "CLAUDE_PLUGIN_OPTION_TELMONI_API_KEY": "from-plugin",
+        "CLAUDE_PLUGIN_OPTION_TELMONI_ENDPOINT": "https://plugin.example",
+    }
+    read = settings.Settings.read({**base, **plugin, "TELMONI_ENDPOINT": "https://repo.example"})
+    assert (read.api_key, read.endpoint) == ("from-plugin", "https://plugin.example")
+    read = settings.Settings.read({**base, **plugin, "TELMONI_API_KEY": "from-env"})
+    assert (read.api_key, read.endpoint) == ("from-env", settings.DEFAULT_ENDPOINT)
+    blank = {**base, **plugin, "TELMONI_API_KEY": "  ", "TELMONI_ENDPOINT": "https://repo.example"}
+    read = settings.Settings.read(blank)
+    assert (read.api_key, read.endpoint) == ("from-plugin", "https://plugin.example")
 
 
 def test_the_state_lives_in_the_plugins_data_folder(tmp_path):
@@ -33,3 +39,13 @@ def test_the_provider_follows_claude_codes_switches():
     assert settings.provider_of({"CLAUDE_CODE_USE_VERTEX": "TRUE"}) == "gcp.vertex_ai"
     assert settings.provider_of({"CLAUDE_CODE_USE_FOUNDRY": "1"}) == "azure.ai.inference"
     assert settings.provider_of({"CLAUDE_CODE_USE_BEDROCK": "0"}) == "anthropic"
+
+
+def test_a_relative_config_folder_is_never_taken(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert settings.state_dir({"CLAUDE_CONFIG_DIR": "relative"}) == tmp_path / ".claude" / "telmoni"
+
+
+def test_the_state_folder_is_the_owners_alone(tmp_path):
+    made = settings.state_dir({"CLAUDE_PLUGIN_DATA": str(tmp_path / "data")})
+    assert made.stat().st_mode & 0o777 == 0o700
